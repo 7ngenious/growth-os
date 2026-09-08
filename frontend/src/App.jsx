@@ -336,11 +336,19 @@ function restUsedThisQuarter(rest) {
 }
 
 // 특정 날짜의 완수 상태: null=편성 없음, 0~1=완수율
+// 건강은 모멘텀과 마찬가지로 판정에서 제외한다 (별도 트랙).
 function dayRate(state, key) {
-  const a = state.assignments[key] || [];
+  const hm = {}; (state.habits || []).forEach((h) => { hm[h.id] = h; });
+  const a = (state.assignments[key] || []).filter((id) => hm[id] && hm[id].stat !== BODY_ID);
   if (!a.length) return null;
   const done = a.filter((id) => (state.checks[key] || []).includes(id)).length;
   return done / a.length;
+}
+
+// 그날 건강 트랙을 하나라도 실행했는지
+function dayBodyDone(state, key) {
+  const bodyIds = new Set((state.habits || []).filter((h) => h.stat === BODY_ID).map((h) => h.id));
+  return (state.checks[key] || []).some((id) => bodyIds.has(id));
 }
 
 // 일자별·영역별 몰입 분 집계: 실제 기록(actualMin) 우선, 없으면 목표 시간
@@ -404,6 +412,7 @@ function HistoryCalendar({ state, selected, onSelect, month, onMonth }) {
           const key = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
           const future = key > todayKey();
           const rate = dayRate(state, key);
+          const bodyDone = dayBodyDone(state, key);
           const hasEvidence = state.evidence.some((e) => e.date === key);
           const hasReview = state.reviews.some((r) => r.date === key);
           const isSel = selected === key;
@@ -423,6 +432,9 @@ function HistoryCalendar({ state, selected, onSelect, month, onMonth }) {
               {hasEvidence && (
                 <span style={{ position: "absolute", top: 0, right: 2, fontSize: 10, color: C.mid, textShadow: "0 0 3px rgba(0,0,0,.7)" }}>★</span>
               )}
+              {bodyDone && (
+                <span style={{ position: "absolute", top: 3, left: 3, width: 5, height: 5, borderRadius: 3, background: AREA_COLORS[BODY_ID] }} />
+              )}
               {hasReview && (
                 <span style={{ position: "absolute", bottom: 3, left: "50%", transform: "translateX(-50%)", width: 4, height: 4, borderRadius: 2, background: rate !== null ? "#0d141c" : C.muted, opacity: .7 }} />
               )}
@@ -431,7 +443,7 @@ function HistoryCalendar({ state, selected, onSelect, month, onMonth }) {
         })}
       </div>
       <div style={{ display: "flex", gap: 12, marginTop: 8, flexWrap: "wrap" }}>
-        {[["전량 완수", "rgba(67,217,163,.7)"], ["일부", "rgba(227,184,78,.6)"], ["미실행", "rgba(224,101,107,.55)"], ["★ 승급", C.mid], ["● 복기", C.muted]].map(([l, c]) => (
+        {[["전량 완수", "rgba(67,217,163,.7)"], ["일부", "rgba(227,184,78,.6)"], ["미실행", "rgba(224,101,107,.55)"], ["★ 승급", C.mid], ["● 복기", C.muted], ["● 건강", AREA_COLORS[BODY_ID]]].map(([l, c]) => (
           <span key={l} style={{ fontSize: 10, color: C.faint, display: "flex", alignItems: "center", gap: 4 }}>
             <span style={{ width: 8, height: 8, borderRadius: 2, background: c }} />{l}
           </span>
@@ -446,7 +458,7 @@ function DayDetail({ state, dateKey }) {
   const checks = state.checks[dateKey] || [];
   const evs = state.evidence.filter((e) => e.date === dateKey);
   const revs = state.reviews.filter((r) => r.date === dateKey);
-  const empty = !assigned.length && !evs.length && !revs.length;
+  const empty = !assigned.length && !checks.length && !evs.length && !revs.length;
   return (
     <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 12, paddingTop: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
@@ -454,7 +466,7 @@ function DayDetail({ state, dateKey }) {
         <span className="gos-disp" style={{ fontSize: 10, color: C.faint, fontWeight: 700 }}>READ ONLY</span>
       </div>
       {empty && <p style={{ fontSize: 12, color: C.faint, margin: 0 }}>이 날의 기록이 없다.</p>}
-      {assigned.map((hid) => {
+      {Array.from(new Set([...assigned, ...checks])).map((hid) => {
         const h = state.habits.find((x) => x.id === hid);
         const on = checks.includes(hid);
         const til = (state.til?.[dateKey] || {})[hid];
@@ -1933,10 +1945,11 @@ export default function GrowthOS() {
               {(() => {
                 const y = calMonth.getFullYear(), m = calMonth.getMonth();
                 const dim = new Date(y, m + 1, 0).getDate();
-                let full = 0, partial = 0, miss = 0, frozen = 0;
+                let full = 0, partial = 0, miss = 0, frozen = 0, bodyDays = 0;
                 for (let d = 1; d <= dim; d++) {
                   const k = `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
                   if (k > todayKey()) break;
+                  if (dayBodyDone(state, k)) bodyDays++;
                   const r = dayRate(state, k);
                   if (r === null) continue;
                   if (r >= 1) full++;
@@ -1950,12 +1963,13 @@ export default function GrowthOS() {
                     <div className="gos-disp" style={{ fontSize: 10, color: C.faint, fontWeight: 700, marginBottom: 6 }}>
                       {m + 1}월 달성 현황{total === 0 && " — 기록 없음"}
                     </div>
-                    {total > 0 && (
+                    {(total > 0 || bodyDays > 0) && (
                       <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
                         <span className="gos-num" style={{ fontSize: 12, color: C.high }}>🔥 전량 완수 {full}일</span>
                         <span className="gos-num" style={{ fontSize: 12, color: C.mid }}>🟡 일부 완수 {partial}일</span>
                         <span className="gos-num" style={{ fontSize: 12, color: C.low }}>🔴 미실행 {miss}일</span>
                         {frozen > 0 && <span className="gos-num" style={{ fontSize: 12, color: "#6aa8d8" }}>❄ 동결 {frozen}일</span>}
+                        <span className="gos-num" style={{ fontSize: 12, color: AREA_COLORS[BODY_ID] }}>● 건강 {bodyDays}일</span>
                       </div>
                     )}
                   </div>
