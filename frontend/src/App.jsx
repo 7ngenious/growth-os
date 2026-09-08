@@ -558,6 +558,7 @@ export default function GrowthOS() {
   const [selectedDay, setSelectedDay] = useState(null);
   const [showPicker, setShowPicker] = useState(false);
   const [tipIndex, setTipIndex] = useState(0);
+  const [resetConfirm, setResetConfirm] = useState("");
   const [toast, setToast] = useState(null);
   const saveTimer = useRef(null);
 
@@ -1042,6 +1043,28 @@ export default function GrowthOS() {
     a2.click();
     URL.revokeObjectURL(url);
     flash("주간 로그 내보내기 완료");
+  };
+
+  // 전체 초기화 — 실행 전 자동 백업을 내려받고, 온보딩부터 다시 시작한다
+  const resetAll = () => {
+    if (resetConfirm.trim().toUpperCase() !== "RESET") return;
+    try {
+      const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `growth-os-backup-before-reset-${todayKey()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) { /* 백업 실패해도 초기화는 진행 */ }
+    const tk2 = todayKey();
+    setState({
+      ...DEFAULT_STATE,
+      assignments: { [tk2]: generateAssignment(tk2, DEFAULT_STATE.habits, DEFAULT_STATE.weights, {}) },
+    });
+    setResetConfirm("");
+    setTab("main");
+    flash("초기화 완료 — 백업 파일이 다운로드됐다");
   };
 
   const exportData = () => {
@@ -1693,6 +1716,27 @@ export default function GrowthOS() {
               <p style={{ fontSize: 10, color: C.faint, margin: "8px 0 0" }}>
                 복원은 현재 기록을 백업 시점으로 완전히 덮어쓴다. 가져오기 전에 지금 상태를 먼저 내보내라.
               </p>
+            </section>
+
+            <section style={{ background: C.panel, border: `1px solid rgba(224,101,107,.45)`, borderRadius: 8, padding: 16, marginTop: 16 }}>
+              <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: "0 0 4px", color: C.low }}>DANGER ZONE</h2>
+              <p style={{ fontSize: 11, color: C.faint, margin: "0 0 10px", lineHeight: 1.6 }}>
+                모든 기록(능력치·증거·TIL·복기·캘린더)을 지우고 온보딩부터 다시 시작한다. <b style={{ color: C.low }}>되돌릴 수 없다.</b><br />
+                실행 직전 백업 JSON이 자동으로 다운로드되므로, 실수했다면 그 파일을 가져오기로 복원하라.
+              </p>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input className="gos-input gos-num" value={resetConfirm} onChange={(e) => setResetConfirm(e.target.value)}
+                  placeholder="RESET 입력"
+                  style={{ flex: 1, minWidth: 0, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, padding: "9px 10px", color: C.text, fontSize: 13 }} />
+                <button onClick={resetAll} disabled={resetConfirm.trim().toUpperCase() !== "RESET"} className="gos-disp"
+                  style={{
+                    flexShrink: 0, padding: "0 16px", borderRadius: 6, border: "none",
+                    background: resetConfirm.trim().toUpperCase() === "RESET" ? C.low : C.line,
+                    color: resetConfirm.trim().toUpperCase() === "RESET" ? "#fff" : C.faint,
+                    fontSize: 13, fontWeight: 700,
+                    cursor: resetConfirm.trim().toUpperCase() === "RESET" ? "pointer" : "default",
+                  }}>전체 초기화</button>
+              </div>
             </section>
           </>
         )}
