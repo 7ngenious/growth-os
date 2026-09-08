@@ -66,6 +66,18 @@ const store = {
 const attrColor = (v) => (v >= 14 ? C.high : v >= 8 ? C.mid : C.low);
 const AREA_COLORS = { lang: "#43d9a3", tech: "#6aa8d8", port: "#e3b84e", body: "#e0656b" };
 
+// 앱을 열 때마다 하나씩 순차 표시. 탭하면 다음으로 넘어간다.
+const TIPS = [
+  { t: "주간 루틴", d: "일요일 밤에 ① 훈련 탭에서 복기 입력 → ② 설정 탭에서 주간 로그 내보내기 → ③ 리포지토리 logs/ 폴더에 커밋. 100일 뒤 남는 건 앱 데이터가 아니라 매주 기록한 커밋 이력이다." },
+  { t: "레벨은 증거로만", d: "XP가 차면 승급전이 열릴 뿐, 레벨은 외부 증거를 적어야 오른다. 공개한 결과물·시험 점수·발표·면접처럼 제3자가 확인 가능한 것만 증거다." },
+  { t: "행동력은 물리 법칙", d: "직접 올릴 수 없다. 연속 완수는 가속하고, 하루 실패는 유예이며, 2일 연속 미실행부터 매일 감소한다. 근육과 같아서 유지에도 훈련이 필요하다." },
+  { t: "난이도를 속이지 마라", d: "대(20XP) 하나가 소(5XP) 넷과 같다. 쉬운 퀘스트만 골라도 모멘텀에서 이득이 없다. 풀에 넣을 기준: 이걸 이력서나 몸이 기억하는가?" },
+  { t: "TIL이 블로그가 된다", d: "'90분 공부함'은 아무것도 증명하지 않는다. '무엇을 해결했는가' 한 줄이 90일 쌓이면 기술 글 서너 편 분량의 재료가 된다." },
+  { t: "쉬어도 되는 규칙", d: "야근·질병·휴가는 설정 탭 컨디션 모드로 동결하라. 분기 14일 예산 안에서는 감점이 없다. 무단 이탈과 계획된 회복은 다르다." },
+  { t: "빨간 날을 지우지 마라", d: "캘린더의 미실행일은 실패 기록이 아니라 패턴 데이터다. 어느 요일에 무너지는지가 다음 주 복기의 입력이 된다." },
+  { t: "이 앱의 성공 조건", d: "언젠가 불필요해지는 것. 공개된 결과물과 시장의 반응이 진짜 피드백 루프가 되면, 이 앱은 임무를 마친 것이다." },
+];
+
 const FONT_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans+KR:wght@400;500;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
 * { box-sizing: border-box; }
@@ -545,6 +557,7 @@ export default function GrowthOS() {
   const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
   const [selectedDay, setSelectedDay] = useState(null);
   const [showPicker, setShowPicker] = useState(false);
+  const [tipIndex, setTipIndex] = useState(0);
   const [toast, setToast] = useState(null);
   const saveTimer = useRef(null);
 
@@ -556,6 +569,7 @@ export default function GrowthOS() {
         const r = await store.get("growth-os-v2");
         if (r && r.value) s = { ...DEFAULT_STATE, ...JSON.parse(r.value) };
       } catch (e) { /* 첫 실행 */ }
+      s = { ...s, tipSeed: ((s.tipSeed || 0) + 1) % TIPS.length };
       // v5 보정: 어학 초기치 12→11 (시장 상대평가 재조정, 1회만)
       if (!s.calibratedV5) {
         s = { ...s, levels: { ...s.levels, lang: Math.min(s.levels.lang, 11) }, calibratedV5: true };
@@ -564,6 +578,7 @@ export default function GrowthOS() {
       if (!s.assignments[tk] || !s.assignments[tk].length) {
         s = { ...s, assignments: { ...s.assignments, [tk]: generateAssignment(tk, s.habits, s.weights, s.assignments) } };
       }
+      setTipIndex(s.tipSeed || 0);
       setState(s);
       setLoaded(true);
     })();
@@ -1228,6 +1243,25 @@ export default function GrowthOS() {
             행동력은 <span style={{ color: C.accent }}>모멘텀</span>이다 — 연속 완수는 가속, 하루 실패는 유예, <span style={{ color: C.low }}>2일 연속 미실행부터 감소</span>한다. 근육과 같다: 유지에도 훈련이 필요하다. 레벨업은 여전히 <span style={{ color: C.mid }}>외부 증거</span>가 필요하다.
           </p>
         </section>
+        )}
+
+        {tab === "main" && (
+          <button onClick={() => setTipIndex((i) => (i + 1) % TIPS.length)}
+            style={{
+              display: "block", width: "100%", textAlign: "left", cursor: "pointer",
+              background: C.panel, border: `1px solid ${C.line}`, borderLeft: `3px solid ${C.mid}`,
+              borderRadius: 8, padding: "14px 16px", marginBottom: 16, color: C.text,
+            }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+              <span className="gos-disp" style={{ fontSize: 11, color: C.mid, fontWeight: 700 }}>
+                TIP · {TIPS[tipIndex].t}
+              </span>
+              <span className="gos-num" style={{ fontSize: 10, color: C.faint }}>
+                {tipIndex + 1}/{TIPS.length} ›
+              </span>
+            </div>
+            <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.6 }}>{TIPS[tipIndex].d}</div>
+          </button>
         )}
 
         {/* ---------- TODAY ---------- */}
