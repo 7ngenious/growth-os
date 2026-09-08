@@ -567,6 +567,7 @@ export default function GrowthOS() {
   const [showPicker, setShowPicker] = useState(false);
   const [tipIndex, setTipIndex] = useState(0);
   const [resetConfirm, setResetConfirm] = useState("");
+  const [minDraft, setMinDraft] = useState({}); // { habitId: "입력 중 문자열" }
   const [toast, setToast] = useState(null);
   const saveTimer = useRef(null);
 
@@ -804,12 +805,16 @@ export default function GrowthOS() {
     });
   };
 
-  const setActualMin = (habitId, v) => {
-    const n = Math.max(0, Math.min(600, Number(v) || 0));
+  // 입력 중에는 문자열을 그대로 보관하고, 확정(blur/Enter) 시에만 숫자로 반영한다.
+  // 즉시 Number() 변환하면 "10" 입력 중 "1"에서 값이 확정돼 두 자리 입력이 막힌다.
+  const commitActualMin = (habitId, raw, fallback) => {
+    const trimmed = String(raw ?? "").trim();
+    const n = trimmed === "" ? fallback : Math.max(0, Math.min(600, Math.round(Number(trimmed)) || 0));
     setState((s) => ({
       ...s,
       actualMin: { ...(s.actualMin || {}), [tKey]: { ...((s.actualMin || {})[tKey] || {}), [habitId]: n } },
     }));
+    setMinDraft((d) => { const nd = { ...d }; delete nd[habitId]; return nd; });
   };
 
   const setWeeklyGoal = (area, v) => {
@@ -1345,10 +1350,13 @@ export default function GrowthOS() {
                   {on && (
                     <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
                       <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 4, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, padding: "0 8px" }}>
-                        <input className="gos-input gos-num" type="number" min={0} max={600}
-                          value={(state.actualMin?.[tKey] || {})[h.id] ?? habitMin(h)}
-                          onChange={(e) => setActualMin(h.id, e.target.value)}
-                          style={{ width: 44, background: "transparent", border: "none", color: C.accent, fontSize: 12, fontWeight: 600, textAlign: "right", padding: "8px 0" }} />
+                        <input className="gos-input gos-num" type="number" min={0} max={600} step={5} inputMode="numeric"
+                          value={minDraft[h.id] ?? String((state.actualMin?.[tKey] || {})[h.id] ?? habitMin(h))}
+                          onChange={(e) => setMinDraft((d) => ({ ...d, [h.id]: e.target.value }))}
+                          onBlur={(e) => commitActualMin(h.id, e.target.value, habitMin(h))}
+                          onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                          onFocus={(e) => e.currentTarget.select()}
+                          style={{ width: 46, background: "transparent", border: "none", color: C.accent, fontSize: 12, fontWeight: 600, textAlign: "right", padding: "8px 0" }} />
                         <span className="gos-num" style={{ fontSize: 10, color: C.faint }}>분</span>
                       </div>
                       <input className="gos-input" value={(state.til?.[tKey] || {})[h.id] || ""}
