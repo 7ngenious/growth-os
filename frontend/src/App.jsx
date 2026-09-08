@@ -160,9 +160,17 @@ const xpNeed = (level) => 60 + level * 10;
 
 const fmtDate = (d) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-const todayKey = () => fmtDate(new Date());
-const quarterLabel = () => {
+// 하루 마감 오프셋: 새벽 2시까지는 전날로 귀속된다.
+// 늦게까지 작업하는 날의 기록이 다음 날로 밀리지 않게 하기 위함.
+const DAY_CUTOFF_HOUR = 2;
+const logicalNow = () => {
   const d = new Date();
+  d.setHours(d.getHours() - DAY_CUTOFF_HOUR);
+  return d;
+};
+const todayKey = () => fmtDate(logicalNow());
+const quarterLabel = () => {
+  const d = logicalNow();
   return `SEASON ${d.getFullYear()} · Q${Math.floor(d.getMonth() / 3) + 1}`;
 };
 
@@ -237,13 +245,13 @@ function calcExecution(assignments, checks, habits, rest) {
   const activeKeys = Object.keys(assignments)
     .filter((k) => (assignments[k] || []).length)
     .sort();
-  const tk = todayKey();
+  const tk = todayKey();  // 논리 날짜 기준 (새벽 2시 마감)
   let M = 0, streak = 0, missRun = 0, status = "idle";
   let assigned14 = 0, done14 = 0, totalFull = 0, maxStreak = 0;
 
   if (activeKeys.length) {
     const start = new Date(activeKeys[0] + "T12:00:00");
-    const cutoff14 = new Date(); cutoff14.setDate(cutoff14.getDate() - 13);
+    const cutoff14 = logicalNow(); cutoff14.setDate(cutoff14.getDate() - 13);
     for (const d = new Date(start); ; d.setDate(d.getDate() + 1)) {
       const k = fmtDate(d);
       if (k > tk) break;
@@ -333,7 +341,7 @@ function weekStartKey(dateKey) {
 /* Calendar (읽기 전용 — 과거는 열람만, 수정 불가)                       */
 /* ------------------------------------------------------------------ */
 function HistoryCalendar({ state, selected, onSelect, month, onMonth }) {
-  const today = new Date();
+  const today = logicalNow();
   const first = new Date(month.getFullYear(), month.getMonth(), 1);
   const startPad = (first.getDay() + 6) % 7; // 월=0
   const daysInMonth = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
@@ -860,7 +868,7 @@ export default function GrowthOS() {
   const exportReport = () => {
     const p = state.profile || {};
     const days = p.startDate ? Math.max(1, Math.floor((new Date() - new Date(p.startDate + "T00:00:00")) / 86400000) + 1) : "-";
-    const now = new Date();
+    const now = logicalNow();
     const qStart = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1);
     let active = 0, full = 0, aN = 0, dN = 0;
     for (const d = new Date(qStart); d <= now; d.setDate(d.getDate() + 1)) {
@@ -1295,7 +1303,7 @@ export default function GrowthOS() {
                 <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>TODAY'S QUESTS</h2>
                 <span className="gos-num" style={{ fontSize: 12, color: C.muted }}>{todayChecks.filter((id) => todayAssigned.includes(id)).length}/{todayAssigned.length} · {tKey}</span>
               </div>
-              <p style={{ fontSize: 11, color: C.faint, margin: "0 0 10px" }}>가중치 기반 자동 편성 · 같은 영역 주 {WEEKLY_CAP}회 상한</p>
+              <p style={{ fontSize: 11, color: C.faint, margin: "0 0 10px" }}>가중치 기반 자동 편성 · 같은 영역 주 {WEEKLY_CAP}회 상한 · 하루 마감 새벽 {DAY_CUTOFF_HOUR}시</p>
               {todayAssigned.map((hid, idx) => {
                 const h = state.habits.find((x) => x.id === hid);
                 if (!h) return null;
@@ -1747,7 +1755,7 @@ export default function GrowthOS() {
             <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
               <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: "0 0 10px" }}>QUARTER SUMMARY · 분기 실행 기록</h2>
               {(() => {
-                const now = new Date();
+                const now = logicalNow();
                 const qStart = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1);
                 let active = 0, full = 0, assignedN = 0, doneN = 0;
                 const d = new Date(qStart);
