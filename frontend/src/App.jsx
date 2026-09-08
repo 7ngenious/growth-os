@@ -1350,12 +1350,13 @@ export default function GrowthOS() {
                   {on && (
                     <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
                       <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 4, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, padding: "0 8px" }}>
-                        <input className="gos-input gos-num" type="number" min={0} max={600} step={5} inputMode="numeric"
+                        <input className="gos-input gos-num" type="text" inputMode="numeric" pattern="[0-9]*"
                           value={minDraft[h.id] ?? String((state.actualMin?.[tKey] || {})[h.id] ?? habitMin(h))}
                           onChange={(e) => setMinDraft((d) => ({ ...d, [h.id]: e.target.value }))}
                           onBlur={(e) => commitActualMin(h.id, e.target.value, habitMin(h))}
                           onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-                          onFocus={(e) => e.currentTarget.select()}
+                          onFocus={(e) => { const el = e.currentTarget; setTimeout(() => { try { el.select(); el.setSelectionRange(0, el.value.length); } catch (_) {} }, 0); }}
+                          onClick={(e) => { const el = e.currentTarget; setTimeout(() => { try { el.select(); } catch (_) {} }, 0); }}
                           style={{ width: 46, background: "transparent", border: "none", color: C.accent, fontSize: 12, fontWeight: 600, textAlign: "right", padding: "8px 0" }} />
                         <span className="gos-num" style={{ fontSize: 10, color: C.faint }}>분</span>
                       </div>
