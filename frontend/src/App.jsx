@@ -94,7 +94,8 @@ button:focus-visible { outline: 2px solid #43d9a3; outline-offset: 2px; }
 /* ------------------------------------------------------------------ */
 /* Domain                                                              */
 /* ------------------------------------------------------------------ */
-// 훈련 가능한 4개 영역 (레벨 + 증거 기반 승급)
+// 전체 영역 (레벨 + 증거 기반 승급)
+// 주의: 건강(body)은 퀘스트 추첨과 모멘텀 판정에서 제외된다 — 경쟁 자산이 아니라 제약 조건이므로.
 const AREAS = [
   { id: "lang", name: "어학", en: "LANGUAGE" },
   { id: "tech", name: "기술", en: "TECHNICAL" },
@@ -103,6 +104,9 @@ const AREAS = [
 ];
 // 행동력: 파생 지표. 습관도 XP도 승급전도 없다.
 const EXEC = { id: "exec", name: "행동력", en: "EXECUTION" };
+// 건강은 별도 트랙 — 추첨에 참여하지 않고, 미실행이 스트릭·모멘텀을 깎지 않는다.
+const BODY_ID = "body";
+const TRAIN_AREAS = AREAS.filter((a) => a.id !== BODY_ID);
 
 const DEFAULT_STATE = {
   onboarded: false,
@@ -207,8 +211,9 @@ function generateAssignment(dateKey, habits, weights, assignments) {
   const rand = seededRandom(dateKey + "|gos");
   const weekCount = weeklyStatCount(assignments, habits, new Date(dateKey + "T12:00:00"));
   const picked = [];
-  const pool = habits.filter((h) => (weights[h.stat] || 0) > 0);
-  const fallback = pool.length ? pool : habits.slice();
+  const trainable = habits.filter((h) => h.stat !== BODY_ID); // 건강은 추첨 제외
+  const pool = trainable.filter((h) => (weights[h.stat] || 0) > 0);
+  const fallback = pool.length ? pool : trainable.slice();
 
   for (let slot = 0; slot < QUESTS_PER_DAY; slot++) {
     let candidates = fallback.filter(
@@ -255,7 +260,9 @@ function calcExecution(assignments, checks, habits, rest) {
     for (const d = new Date(start); ; d.setDate(d.getDate() + 1)) {
       const k = fmtDate(d);
       if (k > tk) break;
-      const a = (assignments[k] || []).filter((id) => hMap[id]); // 삭제된 습관은 판정에서 제외
+      // 삭제된 습관과 건강 퀘스트는 모멘텀 판정에서 제외한다.
+      // 건강은 제약 조건이지 경쟁 자산이 아니므로, 미실행이 다른 성과를 깎지 않는다.
+      const a = (assignments[k] || []).filter((id) => hMap[id] && hMap[id].stat !== BODY_ID);
       const doneIds = a.filter((id) => (checks[k] || []).includes(id));
       const totalW = a.reduce((s, id) => s + habitXp(hMap[id]), 0);
       const doneW = doneIds.reduce((s, id) => s + habitXp(hMap[id]), 0);
@@ -298,6 +305,27 @@ function calcExecution(assignments, checks, habits, rest) {
     rate14: assigned14 ? done14 / assigned14 : 0,
     gainPerDay: Math.round((0.7 + 0.05 * Math.min(streak, 10)) * 10) / 10,
   };
+}
+
+// 건강 트랙 이행률: 최근 14일 중 건강 퀘스트를 하나라도 완수한 날의 비율
+function calcBodyRate(checks, habits) {
+  const bodyIds = new Set(habits.filter((h) => h.stat === BODY_ID).map((h) => h.id));
+  if (!bodyIds.size) return { rate: 0, done: 0, days: 14, streak: 0 };
+  const today = logicalNow();
+  let done = 0;
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(today); d.setDate(d.getDate() - i);
+    if ((checks[fmtDate(d)] || []).some((id) => bodyIds.has(id))) done += 1;
+  }
+  // 연속일: 오늘 미실행이어도 어제까지로 계산 (아직 하루가 끝나지 않았으므로)
+  let streak = 0;
+  const c = logicalNow();
+  if (!(checks[fmtDate(c)] || []).some((id) => bodyIds.has(id))) c.setDate(c.getDate() - 1);
+  for (;;) {
+    if ((checks[fmtDate(c)] || []).some((id) => bodyIds.has(id))) { streak += 1; c.setDate(c.getDate() - 1); }
+    else break;
+  }
+  return { rate: done / 14, done, days: 14, streak };
 }
 
 // 이번 분기 컨디션 모드 사용 일수
@@ -623,6 +651,8 @@ export default function GrowthOS() {
   const todayAssigned = state.assignments[tKey] || [];
   const todayChecks = state.checks[tKey] || [];
   const exec = calcExecution(state.assignments, state.checks, state.habits, state.rest);
+  const body = calcBodyRate(state.checks, state.habits);
+  const bodyHabits = state.habits.filter((h) => h.stat === BODY_ID);
   const dayMin = minutesByDay(state);
   const cumMin = { lang: 0, tech: 0, port: 0, body: 0 };
   Object.values(dayMin).forEach((m) => AREAS.forEach((a) => { cumMin[a.id] += m[a.id] || 0; }));
@@ -1214,7 +1244,10 @@ export default function GrowthOS() {
                     <div style={{ height: 6, background: C.bg, borderRadius: 3, overflow: "hidden" }}>
                       <div style={{ height: "100%", width: `${Math.min(100, (cur / need) * 100)}%`, background: ready ? C.mid : C.accent, transition: "width .3s" }} />
                     </div>
-                    <div className="gos-num" style={{ fontSize: 10, color: C.faint, marginTop: 3 }}>{cur} / {need} XP · 누적 {(cumMin[st.id] / 60).toFixed(1)}h</div>
+                    <div className="gos-num" style={{ fontSize: 10, color: C.faint, marginTop: 3 }}>
+                      {cur} / {need} XP · 누적 {(cumMin[st.id] / 60).toFixed(1)}h
+                      {st.id === BODY_ID && <span style={{ color: body.rate >= 0.7 ? C.high : C.faint }}> · 14일 {body.done}/14</span>}
+                    </div>
                   </div>
                   <button onClick={() => ready && setLevelUpTarget(st.id)} disabled={!ready} className="gos-disp"
                     style={{
@@ -1384,7 +1417,7 @@ export default function GrowthOS() {
               )}
               {showPicker && (
                 <div style={{ marginTop: 8, border: `1px solid ${C.line}`, borderRadius: 6, overflow: "hidden" }}>
-                  {state.habits.filter((h) => !todayAssigned.includes(h.id)).map((h) => {
+                  {state.habits.filter((h) => h.stat !== BODY_ID && !todayAssigned.includes(h.id)).map((h) => {
                     const st = AREAS.find((s) => s.id === h.stat);
                     return (
                       <button key={h.id} onClick={() => addQuestToday(h.id)}
@@ -1398,11 +1431,61 @@ export default function GrowthOS() {
                       </button>
                     );
                   })}
-                  {state.habits.filter((h) => !todayAssigned.includes(h.id)).length === 0 && (
+                  {state.habits.filter((h) => h.stat !== BODY_ID && !todayAssigned.includes(h.id)).length === 0 && (
                     <div style={{ padding: "10px 12px", fontSize: 12, color: C.faint }}>추가할 수 있는 훈련 항목이 없다. 집중 설정에서 풀을 늘려라.</div>
                   )}
                 </div>
               )}
+            </section>
+
+            <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderLeft: `3px solid ${AREA_COLORS[BODY_ID]}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+                <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>CONDITION TRACK · 건강</h2>
+                <span className="gos-num" style={{ fontSize: 11, color: body.rate >= 0.7 ? C.high : body.rate >= 0.4 ? C.mid : C.faint }}>
+                  최근 14일 {body.done}/14일 ({Math.round(body.rate * 100)}%)
+                </span>
+              </div>
+              <p style={{ fontSize: 11, color: C.faint, margin: "0 0 10px", lineHeight: 1.5 }}>
+                추첨에 참여하지 않고 매일 표시된다. 못한 날이 스트릭·모멘텀을 깎지 않는다 —
+                건강은 경쟁하는 자산이 아니라 나머지를 가능하게 하는 조건이다.
+              </p>
+              {bodyHabits.length === 0 && (
+                <p style={{ fontSize: 12, color: C.faint, margin: 0 }}>건강 항목이 없다. 설정 탭 QUEST POOL에서 추가하라.</p>
+              )}
+              {bodyHabits.map((h) => {
+                const on = todayChecks.includes(h.id);
+                return (
+                  <div key={h.id} style={{ marginBottom: 8 }}>
+                    <button onClick={() => toggleHabit(h)} className="gos-check"
+                      style={{
+                        display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left",
+                        padding: "12px 12px", borderRadius: 6, cursor: "pointer",
+                        border: `1px solid ${on ? AREA_COLORS[BODY_ID] : C.line}`,
+                        background: on ? "rgba(224,101,107,.08)" : C.panelHi, color: C.text,
+                      }}>
+                      <span style={{
+                        width: 22, height: 22, borderRadius: 5, flexShrink: 0,
+                        border: `2px solid ${on ? AREA_COLORS[BODY_ID] : C.faint}`,
+                        background: on ? AREA_COLORS[BODY_ID] : "transparent",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        color: C.bg, fontSize: 14, fontWeight: 700,
+                      }}>{on ? "✓" : ""}</span>
+                      <span style={{ flex: 1, fontSize: 14, opacity: on ? 0.75 : 1 }}>{h.name}</span>
+                      <span className="gos-num" style={{ fontSize: 10, color: C.faint, flexShrink: 0 }}>+{habitXp(h)}</span>
+                    </button>
+                    {on && (
+                      <input className="gos-input" value={(state.til?.[tKey] || {})[h.id] || ""}
+                        onChange={(e) => setTil(h.id, e.target.value)}
+                        placeholder="메모 (선택)"
+                        style={{
+                          width: "100%", marginTop: 4, background: C.bg,
+                          border: `1px solid ${C.line}`, borderLeft: `3px solid ${AREA_COLORS[BODY_ID]}`,
+                          borderRadius: 6, padding: "8px 10px", color: C.text, fontSize: 12,
+                        }} />
+                    )}
+                  </div>
+                );
+              })}
             </section>
 
             <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
@@ -1548,10 +1631,11 @@ export default function GrowthOS() {
               <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: "0 0 4px" }}>TRAINING FOCUS</h2>
               <p style={{ fontSize: 11, color: C.faint, margin: "0 0 12px", lineHeight: 1.5 }}>
                 영역별 훈련 비중. 편성 확률에 반영된다. <span style={{ color: C.mid }}>집중은 최대 2개</span> — 전부 집중이면 아무것도 집중이 아니다.
+                건강은 추첨 대상이 아니므로 여기 없다(훈련 탭 별도 트랙).
               </p>
-              {AREAS.map((st) => {
+              {TRAIN_AREAS.map((st) => {
                 const w = state.weights[st.id] || 0;
-                const focusCount = AREAS.filter((a) => (state.weights[a.id] || 0) === 3).length;
+                const focusCount = TRAIN_AREAS.filter((a) => (state.weights[a.id] || 0) === 3).length;
                 return (
                   <div key={st.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderTop: `1px solid ${C.line}` }}>
                     <div style={{ width: 84, flexShrink: 0, fontSize: 14 }}>{st.name}</div>
