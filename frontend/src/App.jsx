@@ -867,6 +867,8 @@ export default function GrowthOS() {
       ``,
       `> ${p.dream || ""} · DAY ${days} · ${quarterLabel()}`,
       ``,
+      `> 생성일: ${todayKey()}${p.startDate ? ` · 시작일: ${p.startDate}` : ""}`,
+      ``,
       `## Attributes (1–20, 시장 상대평가)`,
       ``,
       `| 영역 | 현재 | 목표 | 누적 몰입 | 하위 스킬 |`,
@@ -945,6 +947,86 @@ export default function GrowthOS() {
       }
     };
     reader.readAsText(file);
+  };
+
+  // 주간 로그: 이번 주(월~일) TIL·시간·완수·복기·승급을 마크다운으로
+  const exportWeekly = () => {
+    const monday = new Date(thisWeekKey + "T12:00:00");
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(monday); d.setDate(d.getDate() + i);
+      const k = fmtDate(d);
+      if (k > tKey) break;
+      days.push(k);
+    }
+    const hm = {}; state.habits.forEach((h) => { hm[h.id] = h; });
+    const lines = [];
+    lines.push(`# WEEKLY LOG — ${thisWeekKey} 주차`);
+    lines.push(``);
+    lines.push(`> ${state.profile?.job || ""} · ${state.profile?.dream || ""} · 생성일 ${todayKey()}`);
+    lines.push(``);
+
+    // 주간 목표 달성
+    lines.push(`## 주간 목표 달성`);
+    lines.push(``);
+    lines.push(`| 영역 | 실적 | 목표 | 달성 |`);
+    lines.push(`|---|---|---|---|`);
+    AREAS.forEach((a) => {
+      const g = (state.weeklyGoals || {})[a.id] ?? 0;
+      const h = weekMin[a.id] / 60;
+      lines.push(`| ${a.name} | ${h.toFixed(1)}h | ${g}h | ${g > 0 && h >= g ? "✓" : "—"} |`);
+    });
+    lines.push(``);
+
+    // 일자별 실행 + TIL
+    lines.push(`## 일자별 기록`);
+    lines.push(``);
+    days.forEach((k) => {
+      const a = (state.assignments[k] || []).filter((id) => hm[id]);
+      const done = a.filter((id) => (state.checks[k] || []).includes(id));
+      const rest = state.rest?.[k];
+      const mark = rest ? "❄" : a.length === 0 ? "·" : done.length === a.length ? "🔥" : done.length > 0 ? "🟡" : "🔴";
+      lines.push(`### ${k} ${mark} ${done.length}/${a.length}${rest ? ` (${rest})` : ""}`);
+      a.forEach((id) => {
+        const h = hm[id];
+        const on = done.includes(id);
+        const min = state.actualMin?.[k]?.[id] ?? habitMin(h);
+        const til = (state.til?.[k] || {})[id];
+        lines.push(`- ${on ? "✓" : "✗"} ${h.name}${on ? ` (${min}분)` : ""}`);
+        if (on && til && til.trim()) lines.push(`  - TIL: ${til.trim()}`);
+      });
+      lines.push(``);
+    });
+
+    // 이번 주 승급·복기
+    const evs = state.evidence.filter((e) => e.date >= thisWeekKey);
+    lines.push(`## 이번 주 승급`);
+    lines.push(``);
+    lines.push(...(evs.length
+      ? evs.map((ev) => {
+          const st = AREAS.find((s) => s.id === ev.stat);
+          return `- ${ev.date} ${ev.major ? "★" : ""}[${st?.name}] ${ev.from}→${ev.to} (${ev.kind === "official" ? "공인" : "자체"}) — ${ev.text}${ev.url ? ` [증거 확인](${ev.url})` : ""}`;
+        })
+      : ["- (없음)"]));
+    lines.push(``);
+    const revs = state.reviews.filter((r) => r.date >= thisWeekKey);
+    lines.push(`## 이번 주 복기`);
+    lines.push(``);
+    lines.push(...(revs.length
+      ? revs.map((r) => `- 실책: ${r.mistake}\n- 수정: ${r.fix}`)
+      : ["- (없음)"]));
+    lines.push(``);
+    lines.push(`---`);
+    lines.push(`*이 로그의 TIL 항목은 기술 블로그 초안의 재료다.*`);
+
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a2 = document.createElement("a");
+    a2.href = url;
+    a2.download = `weekly-log-${thisWeekKey}.md`;
+    a2.click();
+    URL.revokeObjectURL(url);
+    flash("주간 로그 내보내기 완료");
   };
 
   const exportData = () => {
@@ -1557,6 +1639,10 @@ export default function GrowthOS() {
               <button onClick={exportReport} className="gos-disp"
                 style={{ width: "100%", padding: "11px 0", borderRadius: 6, border: "none", background: C.accent, color: C.bg, fontSize: 13, fontWeight: 700, cursor: "pointer", marginBottom: 8 }}>
                 ★ 스카우트 리포트 내보내기 (README.md)
+              </button>
+              <button onClick={exportWeekly} className="gos-disp"
+                style={{ width: "100%", padding: "11px 0", borderRadius: 6, border: `1px solid ${C.mid}`, background: "rgba(227,184,78,.1)", color: C.mid, fontSize: 13, fontWeight: 700, cursor: "pointer", marginBottom: 8 }}>
+                주간 로그 내보내기 (이번 주 TIL·복기)
               </button>
               <button onClick={exportData} className="gos-disp"
                 style={{ width: "100%", padding: "10px 0", borderRadius: 6, border: `1px solid ${C.accent}`, background: "transparent", color: C.accent, fontSize: 13, fontWeight: 700, cursor: "pointer", marginBottom: 8 }}>
