@@ -64,7 +64,7 @@ const store = {
 };
 
 const attrColor = (v) => (v >= 14 ? C.high : v >= 8 ? C.mid : C.low);
-const AREA_COLORS = { lang: "#43d9a3", tech: "#6aa8d8", port: "#e3b84e", body: "#e0656b" };
+const AREA_COLORS = { lang: "#43d9a3", tech: "#7aa2f7", port: "#e3b84e", body: "#5ec8d8" };
 
 // 앱을 열 때마다 하나씩 순차 표시. 탭하면 다음으로 넘어간다.
 const TIPS = [
@@ -433,7 +433,11 @@ function HistoryCalendar({ state, selected, onSelect, month, onMonth }) {
                 <span style={{ position: "absolute", top: 0, right: 2, fontSize: 10, color: C.mid, textShadow: "0 0 3px rgba(0,0,0,.7)" }}>★</span>
               )}
               {bodyDone && (
-                <span style={{ position: "absolute", top: 3, left: 3, width: 5, height: 5, borderRadius: 3, background: AREA_COLORS[BODY_ID] }} />
+                <span style={{
+                  position: "absolute", top: 1, left: 3, fontSize: 9, lineHeight: 1.4,
+                  color: AREA_COLORS[BODY_ID], fontWeight: 700,
+                  textShadow: rate !== null ? "0 0 3px rgba(0,0,0,.5)" : "none",
+                }}>✓</span>
               )}
               {hasReview && (
                 <span style={{ position: "absolute", bottom: 3, left: "50%", transform: "translateX(-50%)", width: 4, height: 4, borderRadius: 2, background: rate !== null ? "#0d141c" : C.muted, opacity: .7 }} />
@@ -443,7 +447,7 @@ function HistoryCalendar({ state, selected, onSelect, month, onMonth }) {
         })}
       </div>
       <div style={{ display: "flex", gap: 12, marginTop: 8, flexWrap: "wrap" }}>
-        {[["전량 완수", "rgba(67,217,163,.7)"], ["일부", "rgba(227,184,78,.6)"], ["미실행", "rgba(224,101,107,.55)"], ["★ 승급", C.mid], ["● 복기", C.muted], ["● 건강", AREA_COLORS[BODY_ID]]].map(([l, c]) => (
+        {[["전량 완수", "rgba(67,217,163,.7)"], ["일부", "rgba(227,184,78,.6)"], ["미실행", "rgba(224,101,107,.55)"], ["★ 승급", C.mid], ["● 복기", C.muted], ["✓ 건강", AREA_COLORS[BODY_ID]]].map(([l, c]) => (
           <span key={l} style={{ fontSize: 10, color: C.faint, display: "flex", alignItems: "center", gap: 4 }}>
             <span style={{ width: 8, height: 8, borderRadius: 2, background: c }} />{l}
           </span>
@@ -1244,7 +1248,7 @@ export default function GrowthOS() {
                     <div className="gos-disp" style={{ fontSize: 9, color: C.faint, fontWeight: 600 }}>{st.en}</div>
                   </div>
                   <div style={{ width: 52, textAlign: "center", flexShrink: 0 }}>
-                    <span className="gos-num" style={{ fontSize: 20, fontWeight: 600, color: attrColor(lv) }}>{lv}</span>
+                    <span className="gos-num" style={{ fontSize: 20, fontWeight: 600, color: st.id === BODY_ID ? AREA_COLORS[BODY_ID] : attrColor(lv) }}>{lv}</span>
                     <span className="gos-num" style={{ fontSize: 11, color: C.faint }}>/20</span>
                     {gap !== null && (
                       <div className="gos-num" style={{ fontSize: 9, color: gap > 0 ? C.mid : C.high, marginTop: 1 }}>
@@ -1258,7 +1262,7 @@ export default function GrowthOS() {
                     </div>
                     <div className="gos-num" style={{ fontSize: 10, color: C.faint, marginTop: 3 }}>
                       {cur} / {need} XP · 누적 {(cumMin[st.id] / 60).toFixed(1)}h
-                      {st.id === BODY_ID && <span style={{ color: body.rate >= 0.7 ? C.high : C.faint }}> · 14일 {body.done}/14</span>}
+                      {st.id === BODY_ID && <span style={{ color: body.done > 0 ? AREA_COLORS[BODY_ID] : C.faint }}> · 14일 중 {body.done}일{body.streak > 1 ? ` · ${body.streak}일 연속` : ""}</span>}
                     </div>
                   </div>
                   <button onClick={() => ready && setLevelUpTarget(st.id)} disabled={!ready} className="gos-disp"
@@ -1453,7 +1457,7 @@ export default function GrowthOS() {
             <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderLeft: `3px solid ${AREA_COLORS[BODY_ID]}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
                 <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>CONDITION TRACK · 건강</h2>
-                <span className="gos-num" style={{ fontSize: 11, color: body.rate >= 0.7 ? C.high : body.rate >= 0.4 ? C.mid : C.faint }}>
+                <span className="gos-num" style={{ fontSize: 11, color: body.rate >= 0.4 ? AREA_COLORS[BODY_ID] : C.faint }}>
                   최근 14일 {body.done}/14일 ({Math.round(body.rate * 100)}%)
                 </span>
               </div>
@@ -1473,7 +1477,7 @@ export default function GrowthOS() {
                         display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left",
                         padding: "12px 12px", borderRadius: 6, cursor: "pointer",
                         border: `1px solid ${on ? AREA_COLORS[BODY_ID] : C.line}`,
-                        background: on ? "rgba(224,101,107,.08)" : C.panelHi, color: C.text,
+                        background: on ? "rgba(94,200,216,.10)" : C.panelHi, color: C.text,
                       }}>
                       <span style={{
                         width: 22, height: 22, borderRadius: 5, flexShrink: 0,
@@ -1969,7 +1973,7 @@ export default function GrowthOS() {
                         <span className="gos-num" style={{ fontSize: 12, color: C.mid }}>🟡 일부 완수 {partial}일</span>
                         <span className="gos-num" style={{ fontSize: 12, color: C.low }}>🔴 미실행 {miss}일</span>
                         {frozen > 0 && <span className="gos-num" style={{ fontSize: 12, color: "#6aa8d8" }}>❄ 동결 {frozen}일</span>}
-                        <span className="gos-num" style={{ fontSize: 12, color: AREA_COLORS[BODY_ID] }}>● 건강 {bodyDays}일</span>
+                        <span className="gos-num" style={{ fontSize: 12, color: AREA_COLORS[BODY_ID] }}>💧 건강 {bodyDays}일</span>
                       </div>
                     )}
                   </div>
