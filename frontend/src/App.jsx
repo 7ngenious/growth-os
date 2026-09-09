@@ -1962,7 +1962,6 @@ export default function GrowthOS() {
               <p style={{ fontSize: 10, color: C.faint, margin: "10px 0 0" }}>
                 개별 목표의 기한은 훈련 탭의 <b style={{ color: C.text }}>메인 퀘스트</b>에서 설정한다. 여기는 전체 목표의 기한이다.
               </p>
-              )}
             </section>
 
             <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
