@@ -181,7 +181,6 @@ const habitXpFor = (h, actualMin) => {
 const habitXp = (h) => habitXpFor(h, habitMin(h)); // 목표 시간 기준 기본값
 const QUESTS_PER_DAY = 2;   // 자동 편성(최소)
 const MAX_QUESTS = 5;       // 수동 추가 포함 최대
-const WEEKLY_CAP = 4; // 같은 영역 주 최대 '자동 편성' 횟수 (수동 추가에는 미적용)
 const REST_BUDGET = 14; // 분기당 컨디션 모드 사용 가능 일수
 // 레벨업 요구 XP: 강한 지수. lv7=448, lv11=1489, lv15=6678, lv19=22182
 // 의도: 일일 퀘스트만으로는 레벨이 거의 오르지 않는다. 레벨은 마일스톤(사건)으로 오른다.
@@ -214,40 +213,21 @@ function seededRandom(seedStr) {
   };
 }
 
-// 이번 주(월~일) 각 영역 편성 횟수
-function weeklyStatCount(assignments, habits, refDate) {
-  const d = new Date(refDate);
-  const day = (d.getDay() + 6) % 7; // 월=0
-  d.setDate(d.getDate() - day);
-  const count = {};
-  for (let i = 0; i < 7; i++) {
-    const k = fmtDate(d);
-    (assignments[k] || []).forEach((hid) => {
-      const h = habits.find((x) => x.id === hid);
-      if (h) count[h.stat] = (count[h.stat] || 0) + 1;
-    });
-    d.setDate(d.getDate() + 1);
-  }
-  return count;
-}
 
 // 가중치 기반 오늘의 퀘스트 편성 (결정적 + 주간 상한)
 function generateAssignment(dateKey, habits, weights, assignments) {
   const rand = seededRandom(dateKey + "|gos");
-  const weekCount = weeklyStatCount(assignments, habits, new Date(dateKey + "T12:00:00"));
   const picked = [];
   const trainable = habits.filter((h) => h.stat !== BODY_ID); // 건강은 추첨 제외
   const pool = trainable.filter((h) => (weights[h.stat] || 0) > 0);
   const fallback = pool.length ? pool : trainable.slice();
 
   for (let slot = 0; slot < QUESTS_PER_DAY; slot++) {
-    let candidates = fallback.filter(
-      (h) => !picked.includes(h.id) && (weekCount[h.stat] || 0) < WEEKLY_CAP
-    );
-    if (!candidates.length)
-      candidates = fallback.filter((h) => !picked.includes(h.id));
+    let candidates = fallback.filter((h) => !picked.includes(h.id));
     if (!candidates.length) break;
-    // 슬롯 내 같은 영역 중복 회피 (대안이 있을 때만)
+    // 같은 날 같은 영역 중복은 피한다 — 단 대안이 있을 때만.
+    // 주간 상한은 두지 않는다: 한 영역에 세부 항목이 여럿이면(RC/LC/단어/스피킹)
+    // 하루에 여러 번, 한 주에 집중적으로 하는 것이 정상이다.
     const diverse = candidates.filter(
       (h) => !picked.some((pid) => fallback.find((x) => x.id === pid)?.stat === h.stat)
     );
@@ -261,7 +241,6 @@ function generateAssignment(dateKey, habits, weights, assignments) {
       if (r <= 0) { chosen = h; break; }
     }
     picked.push(chosen.id);
-    weekCount[chosen.stat] = (weekCount[chosen.stat] || 0) + 1;
   }
   return picked;
 }
@@ -680,6 +659,15 @@ export default function GrowthOS() {
         if (r && r.value) s = { ...DEFAULT_STATE, ...JSON.parse(r.value) };
       } catch (e) { /* 첫 실행 */ }
       s = { ...s, tipSeed: ((s.tipSeed || 0) + 1) % TIPS.length };
+      // v22에서 건강이 별도 트랙으로 분리되기 전 편성 기록 정리 (완료한 건 기록으로 남긴다)
+      if (!s.bodySplitMigrated) {
+        const bodyIds = new Set((s.habits || []).filter((h) => h.stat === BODY_ID).map((h) => h.id));
+        const na = {};
+        Object.entries(s.assignments || {}).forEach(([k, ids]) => {
+          na[k] = ids.filter((id) => !bodyIds.has(id) || (s.checks?.[k] || []).includes(id));
+        });
+        s = { ...s, assignments: na, bodySplitMigrated: true };
+      }
       // v5 보정: 어학 초기치 12→11 (시장 상대평가 재조정, 1회만)
       if (!s.calibratedV5) {
         s = { ...s, levels: { ...s.levels, lang: Math.min(s.levels.lang, 11) }, calibratedV5: true };
@@ -721,7 +709,12 @@ export default function GrowthOS() {
 
   /* ---------- derived ---------- */
   const tKey = todayKey();
-  const todayAssigned = state.assignments[tKey] || [];
+  // 건강은 별도 트랙이므로 편성 목록에서 제외한다.
+  // v22 이전에 생성된 편성 기록에 건강이 남아 있을 수 있어 렌더 단계에서도 거른다.
+  const todayAssigned = (state.assignments[tKey] || []).filter((id) => {
+    const h = state.habits.find((x) => x.id === id);
+    return !h || h.stat !== BODY_ID;
+  });
   const todayChecks = state.checks[tKey] || [];
   const exec = calcExecution(state.assignments, state.checks, state.habits, state.rest);
   const AN = (a) => (uiLang === "ja" ? (a?.ja || a?.name) : a?.name); // 영역명 표시
@@ -779,14 +772,15 @@ export default function GrowthOS() {
     });
   };
 
-  const swapQuest = (slotIdx) => {
+  const swapQuest = (habitId) => {
     setState((s) => {
       const cur = s.assignments[tKey] || [];
-      if ((s.checks[tKey] || []).includes(cur[slotIdx])) return s; // 완료한 퀘스트는 교체 불가
-      const pool = s.habits.filter((h) => (s.weights[h.stat] || 0) > 0 && !cur.includes(h.id));
+      const slotIdx = cur.indexOf(habitId);
+      if (slotIdx < 0) return s;
+      if ((s.checks[tKey] || []).includes(habitId)) return s; // 완료한 퀘스트는 교체 불가
+      const pool = s.habits.filter((h) => h.stat !== BODY_ID && (s.weights[h.stat] || 0) > 0 && !cur.includes(h.id));
       if (!pool.length) return s;
-      const curHabit = s.habits.find((h) => h.id === cur[slotIdx]);
-      const idxOfCur = s.habits.findIndex((h) => h.id === curHabit?.id);
+      const idxOfCur = s.habits.findIndex((h) => h.id === habitId);
       const next = pool.find((h) => s.habits.indexOf(h) > idxOfCur) || pool[0];
       const nextAssign = [...cur];
       nextAssign[slotIdx] = next.id;
@@ -907,12 +901,13 @@ export default function GrowthOS() {
   };
 
   // 자동 편성분(앞 2개)은 제거 불가. 수동 추가분만, 미완료 상태에서만 제거 가능.
-  const removeQuestToday = (slotIdx) => {
+  const removeQuestToday = (habitId) => {
     setState((s) => {
       const cur = s.assignments[tKey] || [];
+      const slotIdx = cur.indexOf(habitId);
       if (slotIdx < QUESTS_PER_DAY) return s;
-      if ((s.checks[tKey] || []).includes(cur[slotIdx])) return s;
-      return { ...s, assignments: { ...s.assignments, [tKey]: cur.filter((_, i) => i !== slotIdx) } };
+      if ((s.checks[tKey] || []).includes(habitId)) return s;
+      return { ...s, assignments: { ...s.assignments, [tKey]: cur.filter((x) => x !== habitId) } };
     });
   };
 
@@ -1656,7 +1651,7 @@ export default function GrowthOS() {
                 <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>TODAY'S QUESTS</h2>
                 <span className="gos-num" style={{ fontSize: 12, color: C.muted }}>{todayChecks.filter((id) => todayAssigned.includes(id)).length}/{todayAssigned.length} · {tKey}</span>
               </div>
-              <p style={{ fontSize: 11, color: C.faint, margin: "0 0 10px" }}>가중치 기반 자동 편성 · 같은 영역 주 {WEEKLY_CAP}회 상한 · 하루 마감 새벽 {DAY_CUTOFF_HOUR}시</p>
+              <p style={{ fontSize: 11, color: C.faint, margin: "0 0 10px" }}>가중치 기반 자동 편성 · 하루 마감 새벽 {DAY_CUTOFF_HOUR}시</p>
               {todayAssigned.map((hid, idx) => {
                 const h = state.habits.find((x) => x.id === hid);
                 if (!h) return null;
@@ -1683,13 +1678,13 @@ export default function GrowthOS() {
                       <span className="gos-num" style={{ fontSize: 10, color: C.faint, flexShrink: 0 }}>{AN(st)} · {habitMin(h)}분</span>
                     </button>
                     {!on && idx >= QUESTS_PER_DAY && (
-                      <button onClick={() => removeQuestToday(idx)} className="gos-disp" title="추가분 제거"
+                      <button onClick={() => removeQuestToday(h.id)} className="gos-disp" title="추가분 제거"
                         style={{ flexShrink: 0, width: 40, borderRadius: 6, border: `1px solid ${C.line}`, background: C.panel, color: C.faint, fontSize: 14, cursor: "pointer" }}>
                         ✕
                       </button>
                     )}
                     {!on && idx < QUESTS_PER_DAY && (
-                      <button onClick={() => swapQuest(idx)} className="gos-disp" title="다른 퀘스트로 교체"
+                      <button onClick={() => swapQuest(h.id)} className="gos-disp" title="다른 퀘스트로 교체"
                         style={{ flexShrink: 0, width: 40, borderRadius: 6, border: `1px solid ${C.line}`, background: C.panel, color: C.muted, fontSize: 15, cursor: "pointer" }}>
                         ⇄
                       </button>
