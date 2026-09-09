@@ -245,6 +245,34 @@ function generateAssignment(dateKey, habits, weights, assignments) {
   return picked;
 }
 
+// 편성이 최소 개수에 못 미치면 기존 항목을 유지한 채 부족분만 채운다.
+// (마이그레이션이나 훈련 항목 삭제로 편성이 줄어든 경우 대응)
+function topUpAssignment(dateKey, existing, habits, weights) {
+  const cur = [...(existing || [])];
+  if (cur.length >= QUESTS_PER_DAY) return cur;
+  const trainable = habits.filter((h) => h.stat !== BODY_ID);
+  const pool = trainable.filter((h) => (weights[h.stat] || 0) > 0);
+  const fallback = pool.length ? pool : trainable;
+  const rand = seededRandom(dateKey + "|topup");
+  let guard = 0;
+  while (cur.length < QUESTS_PER_DAY && guard++ < 20) {
+    let candidates = fallback.filter((h) => !cur.includes(h.id));
+    if (!candidates.length) break;
+    const diverse = candidates.filter(
+      (h) => !cur.some((cid) => habits.find((x) => x.id === cid)?.stat === h.stat));
+    if (diverse.length) candidates = diverse;
+    const total = candidates.reduce((a, h) => a + (weights[h.stat] || 1), 0);
+    let r = rand() * total;
+    let chosen = candidates[candidates.length - 1];
+    for (const h of candidates) {
+      r -= weights[h.stat] || 1;
+      if (r <= 0) { chosen = h; break; }
+    }
+    cur.push(chosen.id);
+  }
+  return cur;
+}
+
 // 행동력 파생 계산: 모멘텀 모델 (0~100 → 레벨 0~20)
 // - 완수일: 난이도 가중 실행률 × (0.7 + 전량완수 스트릭 보너스, 최대 1.2/일) 획득
 // - 부분 완수: 획득하되 스트릭은 유지 / 1일 미실행: 유예 / 2일 연속부터 -1.2/일
@@ -675,6 +703,8 @@ export default function GrowthOS() {
       const tk = todayKey();
       if (!s.assignments[tk] || !s.assignments[tk].length) {
         s = { ...s, assignments: { ...s.assignments, [tk]: generateAssignment(tk, s.habits, s.weights, s.assignments) } };
+      } else if (s.assignments[tk].length < QUESTS_PER_DAY) {
+        s = { ...s, assignments: { ...s.assignments, [tk]: topUpAssignment(tk, s.assignments[tk], s.habits, s.weights) } };
       }
       setTipIndex(s.tipSeed || 0);
       if (s.uiLang) setUiLang(s.uiLang);
@@ -698,8 +728,12 @@ export default function GrowthOS() {
     const t = setInterval(() => {
       const tk2 = todayKey();
       setState((s) => {
-        if (s.assignments[tk2] && s.assignments[tk2].length) return s;
-        return { ...s, assignments: { ...s.assignments, [tk2]: generateAssignment(tk2, s.habits, s.weights, s.assignments) } };
+        const cur = s.assignments[tk2] || [];
+        if (cur.length >= QUESTS_PER_DAY) return s;
+        const next = cur.length
+          ? topUpAssignment(tk2, cur, s.habits, s.weights)
+          : generateAssignment(tk2, s.habits, s.weights, s.assignments);
+        return { ...s, assignments: { ...s.assignments, [tk2]: next } };
       });
     }, 60000);
     return () => clearInterval(t);
@@ -815,10 +849,11 @@ export default function GrowthOS() {
     setState((s) => {
       const cur = s.assignments[tKey] || [];
       const kept = cur.filter((x) => x !== id || (s.checks[tKey] || []).includes(x));
+      const habits = s.habits.filter((h) => h.id !== id);
       return {
         ...s,
-        habits: s.habits.filter((h) => h.id !== id),
-        assignments: { ...s.assignments, [tKey]: kept },
+        habits,
+        assignments: { ...s.assignments, [tKey]: topUpAssignment(tKey, kept, habits, s.weights) },
       };
     });
   };
