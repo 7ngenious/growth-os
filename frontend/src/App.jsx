@@ -134,6 +134,7 @@ const DEFAULT_STATE = {
   goal: {
     name: "제조 데이터 엔지니어 이직",
     targets: { lang: 15, tech: 14, port: 14, body: 12, exec: 16 },
+    deadline: "", // 목표 달성 희망일 — 페이스와 비교해 여유/부족을 계산한다
   },
   deadline: { name: "포트폴리오 공개", date: "" }, // 외부 이벤트 D-Day
   habits: [
@@ -1328,6 +1329,14 @@ export default function GrowthOS() {
               <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>
                 {state.profile?.dream || "목표 미설정"} · {quarterLabel()}
               </div>
+              {state.goal?.deadline && (() => {
+                const left = Math.ceil((new Date(state.goal.deadline + "T23:59:59") - logicalNow()) / 86400000);
+                return (
+                  <div className="gos-num" style={{ fontSize: 11, color: C.faint, marginTop: 6 }}>
+                    목표 「{state.goal?.name || "-"}」 {left < 0 ? `D+${-left}` : `D-${left}`}
+                  </div>
+                );
+              })()}
               {state.deadline?.date && (() => {
                 const diff = Math.ceil((new Date(state.deadline.date + "T23:59:59") - new Date()) / 86400000);
                 return (
@@ -1914,6 +1923,40 @@ export default function GrowthOS() {
                   </div>
                 ))}
               </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, padding: "10px 12px", background: C.panelHi, borderRadius: 6 }}>
+                <span style={{ fontSize: 12, color: C.muted, flexShrink: 0 }}>목표 달성 희망일</span>
+                <input className="gos-input gos-num" type="date" value={state.goal?.deadline || ""}
+                  onChange={(e) => setState((s) => ({ ...s, goal: { ...s.goal, deadline: e.target.value } }))}
+                  style={{ flex: 1, minWidth: 0, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px", color: C.text, fontSize: 12 }} />
+              </div>
+              {state.goal?.deadline && (() => {
+                const left = Math.ceil((new Date(state.goal.deadline + "T23:59:59") - logicalNow()) / 86400000);
+                const worst = AREAS.reduce((acc, a) => {
+                  const tgt = state.goal?.targets?.[a.id];
+                  if (!tgt || tgt <= state.levels[a.id]) return acc;
+                  const remain = xpToTarget(state.levels[a.id], tgt, state.xp[a.id] || 0);
+                  const p = pace[a.id] || 0;
+                  const d = p > 0 ? Math.ceil(remain / p) : Infinity;
+                  return d > (acc?.days ?? -1) ? { area: a, days: d } : acc;
+                }, null);
+                const behind = worst && worst.days > left;
+                return (
+                  <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.6, color: C.faint }}>
+                    <span className="gos-num" style={{ color: left <= 30 ? C.low : C.mid, fontWeight: 600 }}>D-{left > 0 ? left : 0}</span>
+                    {worst && (
+                      <> · 최대 병목 <span style={{ color: AREA_COLORS[worst.area.id] }}>{AN(worst.area)}</span>{" "}
+                        {worst.days === Infinity
+                          ? <span style={{ color: C.low }}>페이스 없음</span>
+                          : <span style={{ color: behind ? C.low : C.high }}>
+                              약 {worst.days}일 ({behind ? `${worst.days - left}일 부족` : `${left - worst.days}일 여유`})
+                            </span>}
+                      </>
+                    )}
+                    <br />일일 퀘스트 페이스만 반영한 값이다 — 마일스톤 하나가 이 숫자를 수십 일 앞당긴다.
+                  </div>
+                );
+              })()}
+
               <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
                 <input className="gos-input" value={state.deadline?.name || ""}
                   onChange={(e) => setState((s) => ({ ...s, deadline: { ...s.deadline, name: e.target.value } }))}
@@ -2015,17 +2058,28 @@ export default function GrowthOS() {
 
             <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
               <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: "0 0 10px" }}>QUEST POOL · 훈련 항목</h2>
-              {state.habits.map((h) => {
-                const st = AREAS.find((s) => s.id === h.stat);
+              {AREAS.map((ar) => {
+                const list = state.habits.filter((h) => h.stat === ar.id);
+                if (!list.length) return null;
+                const totalMin = list.reduce((s, h) => s + habitMin(h), 0);
                 return (
-                  <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderTop: `1px solid ${C.line}` }}>
-                    <span className="gos-disp" style={{ fontSize: 10, color: C.accent, fontWeight: 700, width: 64, flexShrink: 0 }}>{AN(st)}</span>
-                    <span style={{ flex: 1, fontSize: 13 }}>{h.name}</span>
-                    <span className="gos-num" style={{ flexShrink: 0, fontSize: 10, color: habitDiff(h) === 3 ? C.low : habitDiff(h) === 2 ? C.mid : C.faint }}>
-                      {DIFF[habitDiff(h)].label}·{habitMin(h)}분
-                    </span>
-                    <button onClick={() => removeHabit(h.id)} aria-label="삭제"
-                      style={{ flexShrink: 0, border: "none", background: "transparent", color: C.faint, fontSize: 14, cursor: "pointer" }}>✕</button>
+                  <div key={ar.id} style={{ marginBottom: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "6px 0", borderBottom: `1px solid ${C.line}` }}>
+                      <span className="gos-disp" style={{ fontSize: 11, fontWeight: 700, color: AREA_COLORS[ar.id] }}>
+                        {AN(ar)}{ar.id === BODY_ID && " (별도 트랙)"}
+                      </span>
+                      <span className="gos-num" style={{ fontSize: 10, color: C.faint }}>{list.length}개 · 합계 {totalMin}분</span>
+                    </div>
+                    {list.map((h) => (
+                      <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 0 7px 8px" }}>
+                        <span style={{ flex: 1, fontSize: 13 }}>{h.name}</span>
+                        <span className="gos-num" style={{ flexShrink: 0, fontSize: 10, color: habitDiff(h) === 3 ? C.low : habitDiff(h) === 2 ? C.mid : C.faint }}>
+                          {DIFF[habitDiff(h)].label}·{habitMin(h)}분
+                        </span>
+                        <button onClick={() => removeHabit(h.id)} aria-label="삭제"
+                          style={{ flexShrink: 0, border: "none", background: "transparent", color: C.faint, fontSize: 14, cursor: "pointer" }}>✕</button>
+                      </div>
+                    ))}
                   </div>
                 );
               })}
