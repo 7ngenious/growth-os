@@ -1326,11 +1326,16 @@ export default function GrowthOS() {
               <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>
                 {state.profile?.dream || "목표 미설정"} · {quarterLabel()}
               </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
               {state.goal?.deadline && (() => {
                 const left = Math.ceil((new Date(state.goal.deadline + "T23:59:59") - logicalNow()) / 86400000);
                 return (
-                  <div className="gos-num" style={{ fontSize: 11, color: C.faint, marginTop: 6 }}>
-                    목표 「{state.goal?.name || "-"}」 {left < 0 ? `D+${-left}` : `D-${left}`}
+                  <div className="gos-num" style={{
+                    padding: "4px 10px", borderRadius: 5,
+                    border: `1px solid ${C.accent}`, background: "rgba(67,217,163,.08)",
+                    color: C.accent, fontSize: 12, fontWeight: 600,
+                  }}>
+                    🎯 {state.goal?.name || "목표"} {left < 0 ? `D+${-left}` : `D-${left}`}
                   </div>
                 );
               })()}
@@ -1343,7 +1348,7 @@ export default function GrowthOS() {
                 const diff = Math.ceil((new Date(next.due + "T23:59:59") - logicalNow()) / 86400000);
                 return (
                   <div className="gos-num" style={{
-                    display: "inline-block", marginTop: 8, padding: "4px 10px", borderRadius: 5,
+                    padding: "4px 10px", borderRadius: 5,
                     border: `1px solid ${diff <= 7 ? C.low : C.mid}`,
                     color: diff < 0 ? C.low : diff <= 7 ? C.low : C.mid,
                     fontSize: 12, fontWeight: 600, maxWidth: "100%",
@@ -1352,6 +1357,7 @@ export default function GrowthOS() {
                   </div>
                 );
               })()}
+              </div>
             </div>
             <div style={{ textAlign: "right" }}>
               <div className="gos-num" style={{ fontSize: 34, fontWeight: 600, color: attrColor(Math.round(overall)), lineHeight: 1 }}>{overall}</div>
@@ -1933,28 +1939,46 @@ export default function GrowthOS() {
               </div>
               {state.goal?.deadline && (() => {
                 const left = Math.ceil((new Date(state.goal.deadline + "T23:59:59") - logicalNow()) / 86400000);
-                const worst = AREAS.reduce((acc, a) => {
+                const rows = [...AREAS, EXEC].map((a) => {
+                  const lv = a.id === "exec" ? exec.level : state.levels[a.id];
                   const tgt = state.goal?.targets?.[a.id];
-                  if (!tgt || tgt <= state.levels[a.id]) return acc;
-                  const remain = xpToTarget(state.levels[a.id], tgt, state.xp[a.id] || 0);
+                  if (!tgt || tgt <= lv) return { a, lv, tgt, done: true };
+                  if (a.id === "exec") return { a, lv, tgt, derived: true }; // 행동력은 XP로 오르지 않는다
+                  const remain = xpToTarget(lv, tgt, state.xp[a.id] || 0);
                   const p = pace[a.id] || 0;
-                  const d = p > 0 ? Math.ceil(remain / p) : Infinity;
-                  return d > (acc?.days ?? -1) ? { area: a, days: d } : acc;
-                }, null);
-                const behind = worst && worst.days > left;
+                  return { a, lv, tgt, remain, days: p > 0 ? Math.ceil(remain / p) : null };
+                }).sort((x, y) => (y.days ?? (y.done ? -1 : 1e9)) - (x.days ?? (x.done ? -1 : 1e9)));
                 return (
-                  <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.6, color: C.faint }}>
-                    <span className="gos-num" style={{ color: left <= 30 ? C.low : C.mid, fontWeight: 600 }}>D-{left > 0 ? left : 0}</span>
-                    {worst && (
-                      <> · 최대 병목 <span style={{ color: AREA_COLORS[worst.area.id] }}>{AN(worst.area)}</span>{" "}
-                        {worst.days === Infinity
-                          ? <span style={{ color: C.low }}>페이스 없음</span>
-                          : <span style={{ color: behind ? C.low : C.high }}>
-                              약 {worst.days}일 ({behind ? `${worst.days - left}일 부족` : `${left - worst.days}일 여유`})
-                            </span>}
-                      </>
-                    )}
-                    <br />일일 퀘스트 페이스만 반영한 값이다 — 마일스톤 하나가 이 숫자를 수십 일 앞당긴다.
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+                      <span className="gos-disp" style={{ fontSize: 10, color: C.faint, fontWeight: 700 }}>병목 분석 (느린 순)</span>
+                      <span className="gos-num" style={{ fontSize: 12, color: left <= 30 ? C.low : C.mid, fontWeight: 600 }}>
+                        D-{left > 0 ? left : 0}
+                      </span>
+                    </div>
+                    {rows.map((r) => {
+                      const behind = r.days != null && r.days > left;
+                      return (
+                        <div key={r.a.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderTop: `1px solid ${C.line}` }}>
+                          <span style={{ width: 58, flexShrink: 0, fontSize: 12, color: AREA_COLORS[r.a.id] || C.muted }}>{AN(r.a)}</span>
+                          <span className="gos-num" style={{ width: 52, flexShrink: 0, fontSize: 11, color: C.faint }}>{r.lv}→{r.tgt}</span>
+                          <span className="gos-num" style={{ flex: 1, fontSize: 11, textAlign: "right", color: C.faint }}>
+                            {r.done ? <span style={{ color: C.high }}>목표 달성</span>
+                              : r.derived ? "실행 누적으로만 상승"
+                              : `${r.remain.toLocaleString()} XP 남음`}
+                          </span>
+                          <span className="gos-num" style={{ width: 96, flexShrink: 0, fontSize: 11, textAlign: "right",
+                            color: r.done ? C.high : r.days == null ? C.low : behind ? C.low : C.high }}>
+                            {r.done ? "✓" : r.derived ? "—" : r.days == null ? "페이스 0"
+                              : `${r.days}일 (${behind ? `-${r.days - left}` : `+${left - r.days}`})`}
+                          </span>
+                        </div>
+                      );
+                    })}
+                    <p style={{ fontSize: 10, color: C.faint, margin: "8px 0 0", lineHeight: 1.6 }}>
+                      최근 28일 일일 퀘스트 페이스 기준이며 마일스톤은 반영되지 않는다 — 항상 비관적으로 나온다.
+                      「페이스 0」은 그 영역을 28일간 한 번도 하지 않았다는 뜻이다.
+                    </p>
                   </div>
                 );
               })()}
