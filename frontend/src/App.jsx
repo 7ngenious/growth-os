@@ -71,7 +71,7 @@ const TIPS = [
   { t: "주간 루틴", d: "일요일 밤에 ① 훈련 탭에서 복기 입력 → ② 설정 탭에서 주간 로그 내보내기 → ③ 리포지토리 logs/ 폴더에 커밋. 100일 뒤 남는 건 앱 데이터가 아니라 매주 기록한 커밋 이력이다." },
   { t: "레벨은 증거로만", d: "XP가 차면 승급전이 열릴 뿐, 레벨은 외부 증거를 적어야 오른다. 공개한 결과물·시험 점수·발표·면접처럼 제3자가 확인 가능한 것만 증거다." },
   { t: "행동력은 물리 법칙", d: "직접 올릴 수 없다. 연속 완수는 가속하고, 하루 실패는 유예이며, 2일 연속 미실행부터 매일 감소한다. 근육과 같아서 유지에도 훈련이 필요하다." },
-  { t: "난이도를 속이지 마라", d: "대(20XP) 하나가 소(5XP) 넷과 같다. 쉬운 퀘스트만 골라도 모멘텀에서 이득이 없다. 풀에 넣을 기준: 이걸 이력서나 몸이 기억하는가?" },
+  { t: "난이도를 속이지 마라", d: "난이도는 모멘텀 실행률의 가중치다. 대(×4) 하나를 빼먹는 것이 소(×1) 넷을 빼먹는 것과 같다 — 쉬운 것만 골라도 이득이 없다. 풀에 넣을 기준: 이걸 이력서나 몸이 기억하는가?" },
   { t: "TIL이 블로그가 된다", d: "'90분 공부함'은 아무것도 증명하지 않는다. '무엇을 해결했는가' 한 줄이 90일 쌓이면 기술 글 서너 편 분량의 재료가 된다." },
   { t: "쉬어도 되는 규칙", d: "야근·질병·휴가는 설정 탭 컨디션 모드로 동결하라. 분기 14일 예산 안에서는 감점이 없다. 무단 이탈과 계획된 회복은 다르다." },
   { t: "빨간 날을 지우지 마라", d: "캘린더의 미실행일은 실패 기록이 아니라 패턴 데이터다. 어느 요일에 무너지는지가 다음 주 복기의 입력이 된다." },
@@ -1663,7 +1663,7 @@ export default function GrowthOS() {
                         color: C.bg, fontSize: 14, fontWeight: 700,
                       }}>{on ? "✓" : ""}</span>
                       <span style={{ flex: 1, fontSize: 14, opacity: on ? 0.75 : 1 }}>{h.name}</span>
-                      <span className="gos-num" style={{ fontSize: 10, color: C.faint, flexShrink: 0 }}>{AN(st)} · {DIFF[habitDiff(h)].label} +{habitXp(h)} · {habitMin(h)}분</span>
+                      <span className="gos-num" style={{ fontSize: 10, color: C.faint, flexShrink: 0 }}>{AN(st)} · {habitMin(h)}분</span>
                     </button>
                     {!on && idx >= QUESTS_PER_DAY && (
                       <button onClick={() => removeQuestToday(idx)} className="gos-disp" title="추가분 제거"
@@ -1769,7 +1769,7 @@ export default function GrowthOS() {
                         color: C.bg, fontSize: 14, fontWeight: 700,
                       }}>{on ? "✓" : ""}</span>
                       <span style={{ flex: 1, fontSize: 14, opacity: on ? 0.75 : 1 }}>{h.name}</span>
-                      <span className="gos-num" style={{ fontSize: 10, color: C.faint, flexShrink: 0 }}>+{habitXp(h)}</span>
+                      <span className="gos-num" style={{ fontSize: 10, color: C.faint, flexShrink: 0 }}>{habitMin(h)}분</span>
                     </button>
                     {on && (
                       <input className="gos-input" value={(state.til?.[tKey] || {})[h.id] || ""}
@@ -2022,7 +2022,7 @@ export default function GrowthOS() {
                     <span className="gos-disp" style={{ fontSize: 10, color: C.accent, fontWeight: 700, width: 64, flexShrink: 0 }}>{AN(st)}</span>
                     <span style={{ flex: 1, fontSize: 13 }}>{h.name}</span>
                     <span className="gos-num" style={{ flexShrink: 0, fontSize: 10, color: habitDiff(h) === 3 ? C.low : habitDiff(h) === 2 ? C.mid : C.faint }}>
-                      {DIFF[habitDiff(h)].label}·{habitMin(h)}분·최대 {habitXpFor(h, xpCapMin(h))}XP
+                      {DIFF[habitDiff(h)].label}·{habitMin(h)}분
                     </span>
                     <button onClick={() => removeHabit(h.id)} aria-label="삭제"
                       style={{ flexShrink: 0, border: "none", background: "transparent", color: C.faint, fontSize: 14, cursor: "pointer" }}>✕</button>
@@ -2036,9 +2036,9 @@ export default function GrowthOS() {
                 </select>
                 <select className="gos-input" value={newHabitDiff} onChange={(e) => setNewHabitDiff(Number(e.target.value))}
                   style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px", color: C.text, fontSize: 12, flexShrink: 0 }}>
-                  <option value={1}>소 5XP</option>
-                  <option value={2}>중 10XP</option>
-                  <option value={3}>대 20XP</option>
+                  <option value={1}>소 ×1</option>
+                  <option value={2}>중 ×2</option>
+                  <option value={3}>대 ×4</option>
                 </select>
                 <input className="gos-input gos-num" type="number" min={5} max={480} value={newHabitMin}
                   onChange={(e) => setNewHabitMin(Math.max(5, Math.min(480, Number(e.target.value) || 30)))}
@@ -2052,8 +2052,8 @@ export default function GrowthOS() {
                   style={{ flexShrink: 0, padding: "0 14px", borderRadius: 6, border: "none", background: C.accent, color: C.bg, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>추가</button>
               </div>
               <p style={{ fontSize: 10, color: C.faint, margin: "8px 0 0" }}>
-                XP는 <b style={{ color: C.text }}>실제 기록 시간 ÷ 10</b>이며, 상한은 목표 시간의 1.5배(최대 120분)다. 시간을 부풀려도 이득이 제한된다.
-                난이도는 모멘텀 가중치로 쓰인다 — 쉬운 것만 골라도 실행률에서 이득이 없다.
+XP는 직접 정할 수 없다 — <b style={{ color: C.text }}>실제 기록 시간 ÷ 10</b>으로 자동 산출되며 상한은 목표 시간의 1.5배(최대 120분)다.
+                난이도(소·중·대)는 XP가 아니라 <b style={{ color: C.text }}>모멘텀 실행률 가중치</b>로만 쓰인다 — 쉬운 것만 골라도 이득이 없게 하기 위함이다.
               </p>
             </section>
 
