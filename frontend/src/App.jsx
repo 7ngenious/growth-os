@@ -149,8 +149,8 @@ const DEFAULT_STATE = {
   weeklyGoals: { lang: 3, tech: 5, port: 3, body: 2 }, // 영역별 주간 목표 시간(h)
   dreamHistory: [],    // [{ date, dream }] — 달성/변경된 과거의 꿈
   milestones: [        // 메인 퀘스트 — 증빙 필수, 대량 XP
-    { id: "m1", stat: "port", name: "OT 파이프라인 리포지토리 공개", xp: 3000, due: "", done: null },
-    { id: "m2", stat: "lang", name: "TOEIC 900 달성", xp: 3000, due: "", done: null },
+    { id: "m1", stat: "port", name: "OT 파이프라인 리포지토리 공개", xp: 3000, due: "", created: "", done: null },
+    { id: "m2", stat: "lang", name: "TOEIC 900 달성", xp: 3000, due: "", created: "", done: null },
   ],
   assignments: {},     // { 'YYYY-MM-DD': [habitId, habitId] } — 그날 편성된 퀘스트
   checks: {},          // { 'YYYY-MM-DD': [habitId, ...] } — 완료한 퀘스트
@@ -641,7 +641,6 @@ export default function GrowthOS() {
   const [skillName, setSkillName] = useState("");
   const [skillValue, setSkillValue] = useState("");
   const [evidenceUrl, setEvidenceUrl] = useState("");
-  const [majorMode, setMajorMode] = useState(false);
   const [restReason, setRestReason] = useState("");
   const [restUntil, setRestUntil] = useState("");
   const [newHabitDiff, setNewHabitDiff] = useState(2);
@@ -831,7 +830,7 @@ export default function GrowthOS() {
   };
 
   const closePromotion = () => {
-    setLevelUpTarget(null); setMajorMode(false);
+    setLevelUpTarget(null);
     setEvidenceText(""); setEvidenceKind("self"); setSkillName(""); setSkillValue(""); setEvidenceUrl("");
   };
 
@@ -846,11 +845,10 @@ export default function GrowthOS() {
       flash("이미 사용한 증거다. 다른 증거를 제시하라.");
       return;
     }
-    if (majorMode && evidenceKind !== "official") return; // 메이저 승급은 공인 증빙만
     setState((s) => {
       const lv = s.levels[stat];
       if (lv >= 20) return s;
-      if (!majorMode && s.xp[stat] < xpNeed(lv)) return s;
+      if (s.xp[stat] < xpNeed(lv)) return s;
       // 스킬 노드 갱신/추가 (선택)
       const subs = { ...(s.subskills || {}) };
       const nm = skillName.trim(), val = skillValue.trim();
@@ -864,15 +862,13 @@ export default function GrowthOS() {
       return {
         ...s,
         levels: { ...s.levels, [stat]: lv + 1 },
-        xp: majorMode ? s.xp : { ...s.xp, [stat]: s.xp[stat] - xpNeed(lv) },
+        xp: { ...s.xp, [stat]: s.xp[stat] - xpNeed(lv) },
         subskills: subs,
-        deadline: majorMode ? { name: "", date: "" } : s.deadline,
-        evidence: [{ date: tKey, stat, from: lv, to: lv + 1, text, kind: evidenceKind, major: majorMode, url: evidenceUrl.trim() }, ...s.evidence],
+        evidence: [{ date: tKey, stat, from: lv, to: lv + 1, text, kind: evidenceKind, major: false, url: evidenceUrl.trim() }, ...s.evidence],
       };
     });
-    const wasMajor = majorMode;
     closePromotion();
-    flash(wasMajor ? "★ 메이저 승급 — D-Day를 완수했다" : "레벨 업 — 증거가 기록에 남았다");
+    flash("레벨 업 — 증거가 기록에 남았다");
   };
 
   // 컨디션 모드: 오늘~종료일을 동결. 분기 예산 내에서만.
@@ -1000,7 +996,8 @@ export default function GrowthOS() {
       ...s,
       milestones: [...(s.milestones || []), {
         id: "m" + Date.now(), stat, name: name.trim(),
-        xp: MS_TIERS.some((t) => t.xp === Number(xp)) ? Number(xp) : 1200, due: due || "", done: null,
+        xp: MS_TIERS.some((t) => t.xp === Number(xp)) ? Number(xp) : 1200,
+        due: due || "", created: tKey, done: null,
       }],
     }));
   };
@@ -1337,16 +1334,21 @@ export default function GrowthOS() {
                   </div>
                 );
               })()}
-              {state.deadline?.date && (() => {
-                const diff = Math.ceil((new Date(state.deadline.date + "T23:59:59") - new Date()) / 86400000);
+              {(() => {
+                // 가장 임박한 미완료 마일스톤을 헤더에 노출한다.
+                const next = (state.milestones || [])
+                  .filter((m) => !m.done && m.due)
+                  .sort((a, b) => (a.due < b.due ? -1 : 1))[0];
+                if (!next) return null;
+                const diff = Math.ceil((new Date(next.due + "T23:59:59") - logicalNow()) / 86400000);
                 return (
                   <div className="gos-num" style={{
                     display: "inline-block", marginTop: 8, padding: "4px 10px", borderRadius: 5,
                     border: `1px solid ${diff <= 7 ? C.low : C.mid}`,
                     color: diff < 0 ? C.low : diff <= 7 ? C.low : C.mid,
-                    fontSize: 13, fontWeight: 600,
+                    fontSize: 12, fontWeight: 600, maxWidth: "100%",
                   }}>
-                    {state.deadline.name} {diff < 0 ? `D+${-diff} 경과` : diff === 0 ? "D-DAY" : `D-${diff}`}
+                    {next.name} {diff < 0 ? `D+${-diff} 경과` : diff === 0 ? "D-DAY" : `D-${diff}`}
                   </div>
                 );
               })()}
@@ -1957,27 +1959,9 @@ export default function GrowthOS() {
                 );
               })()}
 
-              <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-                <input className="gos-input" value={state.deadline?.name || ""}
-                  onChange={(e) => setState((s) => ({ ...s, deadline: { ...s.deadline, name: e.target.value } }))}
-                  placeholder="D-Day 이벤트 (외부 이벤트만)"
-                  style={{ flex: 1, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", color: C.text, fontSize: 13 }} />
-                <input className="gos-input gos-num" type="date" value={state.deadline?.date || ""}
-                  onChange={(e) => setState((s) => ({ ...s, deadline: { ...s.deadline, date: e.target.value } }))}
-                  style={{ flexShrink: 0, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px", color: C.text, fontSize: 13 }} />
-              </div>
-              <p style={{ fontSize: 10, color: C.faint, margin: "8px 0 0" }}>
-                D-Day는 포트폴리오 공개·시험·발표 같은 외부에서 확인 가능한 이벤트만. 앱 내부 목표는 D-Day가 아니다.
+              <p style={{ fontSize: 10, color: C.faint, margin: "10px 0 0" }}>
+                개별 목표의 기한은 훈련 탭의 <b style={{ color: C.text }}>메인 퀘스트</b>에서 설정한다. 여기는 전체 목표의 기한이다.
               </p>
-              {state.deadline?.date && (
-                <button onClick={() => { setMajorMode(true); setEvidenceKind("official"); setLevelUpTarget("port"); }} className="gos-disp"
-                  style={{
-                    width: "100%", marginTop: 10, padding: "11px 0", borderRadius: 6,
-                    border: `1px solid ${C.mid}`, background: "rgba(227,184,78,.1)",
-                    color: C.mid, fontSize: 13, fontWeight: 700, cursor: "pointer",
-                  }}>
-                  ★ D-DAY 달성 보고 — XP 무관 즉시 승급 (공인 증빙 필수)
-                </button>
               )}
             </section>
 
@@ -2220,6 +2204,13 @@ XP는 직접 정할 수 없다 — <b style={{ color: C.text }}>실제 기록 �
                       <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>TROPHY CASE · 달성 기록</h2>
                       <span className="gos-num" style={{ fontSize: 11, color: C.mid }}>
                         {done.length}건 · {totalXp.toLocaleString()} XP
+                        {(() => {
+                          const withDays = done.filter((m) => m.created);
+                          if (!withDays.length) return null;
+                          const avg = Math.round(withDays.reduce((s, m) => s + Math.max(1,
+                            (new Date(m.done.date) - new Date(m.created)) / 86400000 + 1), 0) / withDays.length);
+                          return <span style={{ color: C.faint }}> · 평균 {avg}일</span>;
+                        })()}
                       </span>
                     </div>
                     {done.length === 0 ? (
@@ -2245,6 +2236,16 @@ XP는 직접 정할 수 없다 — <b style={{ color: C.text }}>실제 기록 �
                                 <div style={{ fontSize: 13, fontWeight: 600 }}>{m.name}</div>
                                 <div className="gos-num" style={{ fontSize: 10, color: C.faint, marginTop: 2 }}>
                                   {m.done.date} · {AN(st)} · {tier?.label || ""} +{m.xp.toLocaleString()} XP
+                                  {m.created && (() => {
+                                    const days = Math.max(1, Math.round(
+                                      (new Date(m.done.date + "T12:00:00") - new Date(m.created + "T12:00:00")) / 86400000) + 1);
+                                    const late = m.due && m.done.date > m.due;
+                                    return (
+                                      <span style={{ color: late ? C.mid : C.high }}>
+                                        {" · "}{m.created} → {days}일 소요{late ? " (기한 초과)" : m.due ? " (기한 내)" : ""}
+                                      </span>
+                                    );
+                                  })()}
                                 </div>
                                 <div style={{ fontSize: 11, color: C.muted, marginTop: 3, lineHeight: 1.5 }}>
                                   {m.done.proof}
@@ -2457,30 +2458,18 @@ XP는 직접 정할 수 없다 — <b style={{ color: C.text }}>실제 기록 �
           <div onClick={(e) => e.stopPropagation()}
             style={{ background: C.panel, border: `1px solid ${C.mid}`, borderRadius: 10, padding: 20, width: "100%", maxWidth: 420 }}>
             <div className="gos-disp" style={{ fontSize: 12, color: C.mid, fontWeight: 700 }}>
-              {majorMode ? "★ MAJOR PROMOTION — D-DAY CLEARED" : "PROMOTION MATCH"}
+              PROMOTION MATCH
             </div>
             <h3 style={{ margin: "4px 0 8px", fontSize: 18, fontWeight: 700 }}>
-              {majorMode ? (
-                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <select className="gos-input" value={levelUpTarget} onChange={(e) => setLevelUpTarget(e.target.value)}
-                    style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, padding: "6px 8px", color: C.text, fontSize: 15, fontWeight: 700 }}>
-                    {AREAS.map((s) => <option key={s.id} value={s.id}>{AN(s)}</option>)}
-                  </select>
-                  <span className="gos-num">{state.levels[levelUpTarget]} → {state.levels[levelUpTarget] + 1}</span>
-                </span>
-              ) : (
-                <>{AREAS.find((s) => s.id === levelUpTarget)?.name} {state.levels[levelUpTarget]} → {state.levels[levelUpTarget] + 1}</>
-              )}
+              {AN(AREAS.find((s) => s.id === levelUpTarget))} {state.levels[levelUpTarget]} → {state.levels[levelUpTarget] + 1}
             </h3>
             <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.6, margin: "0 0 10px" }}>
-              {majorMode
-                ? <>D-Day 「{state.deadline?.name}」 달성을 증명하는 <b style={{ color: C.text }}>공인 증빙</b>을 기록하라. XP와 무관하게 즉시 승급되며, D-Day는 완료 처리된다.</>
-                : <>이 레벨업을 증명하는 <b style={{ color: C.text }}>외부 증거</b>를 기록하라. 공개한 결과물, 시험 점수, 발표, 지원·면접, 타인의 평가 등. 기분이나 자기평가는 증거가 아니다.</>}
+              이 레벨업을 증명하는 <b style={{ color: C.text }}>외부 증거</b>를 기록하라. 공개한 결과물, 시험 점수, 발표, 지원·면접, 타인의 평가 등. 기분이나 자기평가는 증거가 아니다.
             </p>
             <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
               {[["official", "공인 (성적표·자격증·공개 URL·제3자 확인)"], ["self", "자체 (모의고사·블로그·내부 산출물)"]].map(([k, label]) => {
                 const on = evidenceKind === k;
-                const blocked = majorMode && k === "self";
+                const blocked = false;
                 return (
                   <button key={k} disabled={blocked} onClick={() => setEvidenceKind(k)} className="gos-disp"
                     style={{
@@ -2520,7 +2509,7 @@ XP는 직접 정할 수 없다 — <b style={{ color: C.text }}>실제 기록 �
                   background: evidenceText.trim().length >= 8 ? C.mid : C.line,
                   color: evidenceText.trim().length >= 8 ? C.bg : C.faint,
                   fontSize: 13, fontWeight: 700, cursor: evidenceText.trim().length >= 8 ? "pointer" : "default",
-                }}>{majorMode ? "★ 메이저 승급" : "증거 제출 & 레벨 업"}</button>
+                }}>증거 제출 & 레벨 업</button>
             </div>
           </div>
         </div>
