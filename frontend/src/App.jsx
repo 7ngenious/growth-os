@@ -75,6 +75,8 @@ const TIPS = [
   { t: "TIL이 블로그가 된다", d: "'90분 공부함'은 아무것도 증명하지 않는다. '무엇을 해결했는가' 한 줄이 90일 쌓이면 기술 글 서너 편 분량의 재료가 된다." },
   { t: "쉬어도 되는 규칙", d: "야근·질병·휴가는 설정 탭 컨디션 모드로 동결하라. 분기 14일 예산 안에서는 감점이 없다. 무단 이탈과 계획된 회복은 다르다." },
   { t: "빨간 날을 지우지 마라", d: "캘린더의 미실행일은 실패 기록이 아니라 패턴 데이터다. 어느 요일에 무너지는지가 다음 주 복기의 입력이 된다." },
+  { t: "탈락도 기록이다", d: "서류 탈락과 면접 불합격은 실패가 아니라 시장의 응답이다. 지원·면접은 결과와 무관하게 마일스톤으로 기록하라 — 지원하지 않으면 탈락도 없고, 탈락 사유가 다음 분기의 목표가 된다." },
+  { t: "리듬과 방향", d: "일일 퀘스트는 리듬을 만들고, 메인 퀘스트(마일스톤)는 방향을 정한다. 매일 체크만 쌓이고 마일스톤이 몇 달째 그대로면, 열심히 제자리를 걷고 있다는 신호다." },
   { t: "이 앱의 성공 조건", d: "언젠가 불필요해지는 것. 공개된 결과물과 시장의 반응이 진짜 피드백 루프가 되면, 이 앱은 임무를 마친 것이다." },
 ];
 
@@ -97,13 +99,13 @@ button:focus-visible { outline: 2px solid #43d9a3; outline-offset: 2px; }
 // 전체 영역 (레벨 + 증거 기반 승급)
 // 주의: 건강(body)은 퀘스트 추첨과 모멘텀 판정에서 제외된다 — 경쟁 자산이 아니라 제약 조건이므로.
 const AREAS = [
-  { id: "lang", name: "어학", en: "LANGUAGE" },
-  { id: "tech", name: "기술", en: "TECHNICAL" },
-  { id: "port", name: "포트폴리오", en: "PORTFOLIO" },
-  { id: "body", name: "건강", en: "CONDITION" },
+  { id: "lang", name: "어학", ja: "語学", en: "LANGUAGE" },
+  { id: "tech", name: "기술", ja: "技術", en: "TECHNICAL" },
+  { id: "port", name: "성과", ja: "成果", en: "ACHIEVEMENT" },
+  { id: "body", name: "건강", ja: "健康", en: "CONDITION" },
 ];
 // 행동력: 파생 지표. 습관도 XP도 승급전도 없다.
-const EXEC = { id: "exec", name: "행동력", en: "EXECUTION" };
+const EXEC = { id: "exec", name: "행동력", ja: "実行力", en: "EXECUTION" };
 // 건강은 별도 트랙 — 추첨에 참여하지 않고, 미실행이 스트릭·모멘텀을 깎지 않는다.
 const BODY_ID = "body";
 const TRAIN_AREAS = AREAS.filter((a) => a.id !== BODY_ID);
@@ -145,6 +147,10 @@ const DEFAULT_STATE = {
   actualMin: {},       // { 'YYYY-MM-DD': { habitId: 실제 분 } } — 미기록 시 목표 시간 사용
   weeklyGoals: { lang: 3, tech: 5, port: 3, body: 2 }, // 영역별 주간 목표 시간(h)
   dreamHistory: [],    // [{ date, dream }] — 달성/변경된 과거의 꿈
+  milestones: [        // 메인 퀘스트 — 증빙 필수, 대량 XP
+    { id: "m1", stat: "port", name: "OT 파이프라인 리포지토리 공개", xp: 3000, due: "", done: null },
+    { id: "m2", stat: "lang", name: "TOEIC 900 달성", xp: 3000, due: "", done: null },
+  ],
   assignments: {},     // { 'YYYY-MM-DD': [habitId, habitId] } — 그날 편성된 퀘스트
   checks: {},          // { 'YYYY-MM-DD': [habitId, ...] } — 완료한 퀘스트
   evidence: [],        // [{ date, stat, from, to, text, kind, major }]
@@ -152,15 +158,33 @@ const DEFAULT_STATE = {
 };
 
 // 난이도: 소(1)/중(2)/대(3) — XP와 모멘텀 기여 모두 차등
-const DIFF = { 1: { label: "소", xp: 5 }, 2: { label: "중", xp: 10 }, 3: { label: "대", xp: 20 } };
+// 마일스톤 배점은 4단계 고정 — 임의 입력을 막아 XP 인플레이션 경로를 차단한다.
+const MS_TIERS = [
+  { xp: 400, label: "소형", desc: "블로그 1편 · 사내 발표 · 단계 완료" },
+  { xp: 1200, label: "중형", desc: "자격 취득 · 프로젝트 마일스톤" },
+  { xp: 3000, label: "대형", desc: "포트폴리오 공개 · TOEIC 900" },
+  { xp: 8000, label: "특대", desc: "이직 성공 · 등단 · 대체 불가 성과" },
+];
+
+// 일일 퀘스트 XP는 낮다 — 실행의 보상은 XP가 아니라 모멘텀(행동력)이 담당한다.
+const DIFF = { 1: { label: "소", xp: 2 }, 2: { label: "중", xp: 4 }, 3: { label: "대", xp: 8 } };
 const habitDiff = (h) => DIFF[h?.diff] ? h.diff : 2;
-const habitXp = (h) => DIFF[habitDiff(h)].xp;
 const habitMin = (h) => (h && h.min > 0 ? h.min : { 1: 20, 2: 45, 3: 90 }[habitDiff(h)]);
+// 일일 XP = 실제 분 ÷ 10, 상한 = min(목표 시간 × 1.5, 120분)
+// 연속 비례라 등급 경계를 노린 시간 부풀리기가 무의미하고, 상한이 조작 이득을 제한한다.
+const xpCapMin = (h) => Math.min(habitMin(h) * 1.5, 120);
+const habitXpFor = (h, actualMin) => {
+  const m = Math.min(actualMin > 0 ? actualMin : habitMin(h), xpCapMin(h));
+  return Math.max(1, Math.round(m / 10));
+};
+const habitXp = (h) => habitXpFor(h, habitMin(h)); // 목표 시간 기준 기본값
 const QUESTS_PER_DAY = 2;   // 자동 편성(최소)
 const MAX_QUESTS = 5;       // 수동 추가 포함 최대
 const WEEKLY_CAP = 4; // 같은 영역 주 최대 '자동 편성' 횟수 (수동 추가에는 미적용)
 const REST_BUDGET = 14; // 분기당 컨디션 모드 사용 가능 일수
-const xpNeed = (level) => 60 + level * 10;
+// 레벨업 요구 XP: 강한 지수. lv7=448, lv11=1489, lv15=6678, lv19=22182
+// 의도: 일일 퀘스트만으로는 레벨이 거의 오르지 않는다. 레벨은 마일스톤(사건)으로 오른다.
+const xpNeed = (level) => Math.round(100 * Math.pow(1.35, Math.max(0, level - 1)));
 
 const fmtDate = (d) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -326,6 +350,30 @@ function calcBodyRate(checks, habits) {
     else break;
   }
   return { rate: done / 14, done, days: 14, streak };
+}
+
+// 최근 28일 영역별 XP 획득 페이스 (일평균)
+function xpPace(checks, habits) {
+  const hm = {}; habits.forEach((h) => { hm[h.id] = h; });
+  const out = { lang: 0, tech: 0, port: 0, body: 0 };
+  const today = logicalNow();
+  for (let i = 0; i < 28; i++) {
+    const d = new Date(today); d.setDate(d.getDate() - i);
+    (checks[fmtDate(d)] || []).forEach((id) => {
+      const h = hm[id];
+      if (h && out[h.stat] !== undefined) out[h.stat] += habitXp(h);
+    });
+  }
+  Object.keys(out).forEach((k) => { out[k] = out[k] / 28; });
+  return out;
+}
+
+// 현재 레벨→목표 레벨까지 남은 총 XP
+function xpToTarget(level, target, currentXp) {
+  if (target <= level) return 0;
+  let need = -currentXp;
+  for (let l = level; l < target; l++) need += xpNeed(l);
+  return Math.max(0, Math.round(need));
 }
 
 // 이번 분기 컨디션 모드 사용 일수
@@ -552,7 +600,7 @@ function Onboarding({ initialLevels, onStart }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
             {AREAS.map((st) => (
               <div key={st.id} style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>{st.name}</div>
+                <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>{AN(st)}</div>
                 <input className="gos-input gos-num" type="number" min={1} max={20} value={lv[st.id]}
                   onChange={(e) => setL(st.id, e.target.value)}
                   style={{ width: "100%", background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 0", color: attrColor(lv[st.id]), fontSize: 17, fontWeight: 600, textAlign: "center" }} />
@@ -610,7 +658,15 @@ export default function GrowthOS() {
   const [selectedDay, setSelectedDay] = useState(null);
   const [showPicker, setShowPicker] = useState(false);
   const [tipIndex, setTipIndex] = useState(0);
+  const [uiLang, setUiLang] = useState("ko");
   const [resetConfirm, setResetConfirm] = useState("");
+  const [msName, setMsName] = useState("");
+  const [msStat, setMsStat] = useState("port");
+  const [msXp, setMsXp] = useState(1200);
+  const [msDue, setMsDue] = useState("");
+  const [msProofFor, setMsProofFor] = useState(null);
+  const [msProof, setMsProof] = useState("");
+  const [msUrl, setMsUrl] = useState("");
   const [minDraft, setMinDraft] = useState({}); // { habitId: "입력 중 문자열" }
   const [toast, setToast] = useState(null);
   const saveTimer = useRef(null);
@@ -633,6 +689,7 @@ export default function GrowthOS() {
         s = { ...s, assignments: { ...s.assignments, [tk]: generateAssignment(tk, s.habits, s.weights, s.assignments) } };
       }
       setTipIndex(s.tipSeed || 0);
+      if (s.uiLang) setUiLang(s.uiLang);
       setState(s);
       setLoaded(true);
     })();
@@ -667,6 +724,8 @@ export default function GrowthOS() {
   const todayAssigned = state.assignments[tKey] || [];
   const todayChecks = state.checks[tKey] || [];
   const exec = calcExecution(state.assignments, state.checks, state.habits, state.rest);
+  const AN = (a) => (uiLang === "ja" ? (a?.ja || a?.name) : a?.name); // 영역명 표시
+  const pace = xpPace(state.checks, state.habits);
   const body = calcBodyRate(state.checks, state.habits);
   const bodyHabits = state.habits.filter((h) => h.stat === BODY_ID);
   const dayMin = minutesByDay(state);
@@ -700,7 +759,7 @@ export default function GrowthOS() {
     (AREAS.reduce((a, s) => a + state.levels[s.id], 0) + exec.level) / 5
   ).toFixed(1);
   const radarData = [...AREAS, EXEC].map((st) => ({
-    subject: st.name,
+    subject: uiLang === "ja" ? (st.ja || st.name) : st.name,
     value: allLevels[st.id],
     target: targets[st.id] ?? 0,
   }));
@@ -710,10 +769,12 @@ export default function GrowthOS() {
     setState((s) => {
       const cur = s.checks[tKey] || [];
       const on = cur.includes(habit.id);
+      const actual = (s.actualMin?.[tKey] || {})[habit.id] ?? habitMin(habit);
+      const delta = habitXpFor(habit, actual);
       return {
         ...s,
         checks: { ...s.checks, [tKey]: on ? cur.filter((i) => i !== habit.id) : [...cur, habit.id] },
-        xp: { ...s.xp, [habit.stat]: Math.max(0, s.xp[habit.stat] + (on ? -habitXp(habit) : habitXp(habit))) },
+        xp: { ...s.xp, [habit.stat]: Math.max(0, s.xp[habit.stat] + (on ? -delta : delta)) },
       };
     });
   };
@@ -777,6 +838,13 @@ export default function GrowthOS() {
     const stat = levelUpTarget;
     const text = evidenceText.trim();
     if (!stat || text.length < 8) return;
+    // 동일 증거 재사용 금지 — 한 사건으로 여러 레벨을 올리려면 서로 다른 증거가 필요하다.
+    // (연속 승급 자체는 막지 않는다. 큰 성취는 여러 레벨만큼의 값어치가 있다.)
+    const norm = (t) => t.replace(/\s+/g, " ").trim().toLowerCase();
+    if (state.evidence.some((e) => norm(e.text) === norm(text))) {
+      flash("이미 사용한 증거다. 다른 증거를 제시하라.");
+      return;
+    }
     if (majorMode && evidenceKind !== "official") return; // 메이저 승급은 공인 증빙만
     setState((s) => {
       const lv = s.levels[stat];
@@ -856,10 +924,21 @@ export default function GrowthOS() {
   const commitActualMin = (habitId, raw, fallback) => {
     const trimmed = String(raw ?? "").trim();
     const n = trimmed === "" ? fallback : Math.max(0, Math.min(600, Math.round(Number(trimmed)) || 0));
-    setState((s) => ({
-      ...s,
-      actualMin: { ...(s.actualMin || {}), [tKey]: { ...((s.actualMin || {})[tKey] || {}), [habitId]: n } },
-    }));
+    setState((s) => {
+      const h = s.habits.find((x) => x.id === habitId);
+      const checked = (s.checks[tKey] || []).includes(habitId);
+      let xp = s.xp;
+      if (h && checked) {
+        const prev = (s.actualMin?.[tKey] || {})[habitId] ?? habitMin(h);
+        const diff = habitXpFor(h, n) - habitXpFor(h, prev);
+        xp = { ...s.xp, [h.stat]: Math.max(0, (s.xp[h.stat] || 0) + diff) };
+      }
+      return {
+        ...s,
+        xp,
+        actualMin: { ...(s.actualMin || {}), [tKey]: { ...((s.actualMin || {})[tKey] || {}), [habitId]: n } },
+      };
+    });
     setMinDraft((d) => { const nd = { ...d }; delete nd[habitId]; return nd; });
   };
 
@@ -909,6 +988,57 @@ export default function GrowthOS() {
       profile: { ...s.profile, dream: nd },
     }));
     flash("★ 꿈 갱신 — 이전 꿈은 마일스톤으로 기록됐다");
+  };
+
+  const addMilestone = (stat, name, xp, due) => {
+    if (!name.trim()) return;
+    const dup = (state.milestones || []).some(
+      (m) => m.name.trim().toLowerCase() === name.trim().toLowerCase());
+    if (dup && !window.confirm("같은 이름의 마일스톤이 이미 있다. 중복 등록은 XP 인플레이션의 통로다. 그래도 추가할까?")) return;
+    setState((s) => ({
+      ...s,
+      milestones: [...(s.milestones || []), {
+        id: "m" + Date.now(), stat, name: name.trim(),
+        xp: MS_TIERS.some((t) => t.xp === Number(xp)) ? Number(xp) : 1200, due: due || "", done: null,
+      }],
+    }));
+  };
+
+  const removeMilestone = (id) => {
+    const m = (state.milestones || []).find((x) => x.id === id);
+    const overdue = m && m.due && m.due < tKey;
+    if (overdue && !window.confirm(
+      `기한이 지난 마일스톤을 삭제하려 한다.\n\n「${m.name}」 (기한 ${m.due})\n\n` +
+      "목표를 바꾸는 것과 흐지부지 지우는 것은 다르다. 정말 접을 것인가?"
+    )) return;
+    setState((s) => ({ ...s, milestones: (s.milestones || []).filter((x) => x.id !== id) }));
+  };
+
+  // 마일스톤 완료 — 증빙(텍스트 8자 이상)이 없으면 완료 불가
+  const completeMilestone = (id, proof, url) => {
+    const text = (proof || "").trim();
+    if (text.length < 8) return false;
+    setState((s) => ({
+      ...s,
+      milestones: (s.milestones || []).map((m) =>
+        m.id === id ? { ...m, done: { date: tKey, proof: text, url: (url || "").trim() } } : m),
+      xp: (() => {
+        const m = (s.milestones || []).find((x) => x.id === id);
+        if (!m || m.done) return s.xp;
+        return { ...s.xp, [m.stat]: (s.xp[m.stat] || 0) + m.xp };
+      })(),
+      evidence: (() => {
+        const m = (s.milestones || []).find((x) => x.id === id);
+        if (!m || m.done) return s.evidence;
+        return [{
+          date: tKey, stat: m.stat, from: s.levels[m.stat], to: s.levels[m.stat],
+          text: `[마일스톤] ${m.name} — ${text} (+${m.xp} XP)`,
+          kind: "official", major: true, url: (url || "").trim(),
+        }, ...s.evidence];
+      })(),
+    }));
+    flash("★ 마일스톤 달성 — XP가 반영됐다");
+    return true;
   };
 
   const setTarget = (statId, v) => {
@@ -963,6 +1093,17 @@ export default function GrowthOS() {
             const link = ev.url ? ` [증거 확인](${ev.url})` : "";
             return `- ${ev.date} ${ev.major ? "★" : ""}[${st?.name}] ${ev.from}→${ev.to} (${ev.kind === "official" ? "공인" : "자체"}) — ${ev.text}${link}`;
           })
+        : ["- (아직 없음)"]),
+      ``,
+      `## Achievements (증빙 확정된 성취)`,
+      ``,
+      ...((state.milestones || []).filter((m) => m.done).length
+        ? (state.milestones || []).filter((m) => m.done)
+            .sort((a, b) => (a.done.date < b.done.date ? 1 : -1))
+            .map((m) => {
+              const st = AREAS.find((a) => a.id === m.stat);
+              return `- ${m.done.date} [${st?.name}] **${m.name}** — ${m.done.proof}${m.done.url ? ` [증빙](${m.done.url})` : ""}`;
+            })
         : ["- (아직 없음)"]),
       ``,
       `## Engineering Log (TIL)`,
@@ -1243,18 +1384,28 @@ export default function GrowthOS() {
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <div style={{ width: 84, flexShrink: 0 }}>
                     <div style={{ fontSize: 14, fontWeight: 500 }}>
-                      {st.name}{w === 3 && <span style={{ color: C.accent, fontSize: 10, marginLeft: 4 }}>●집중</span>}
+                      {AN(st)}{w === 3 && <span style={{ color: C.accent, fontSize: 10, marginLeft: 4 }}>●집중</span>}
                     </div>
                     <div className="gos-disp" style={{ fontSize: 9, color: C.faint, fontWeight: 600 }}>{st.en}</div>
                   </div>
                   <div style={{ width: 52, textAlign: "center", flexShrink: 0 }}>
-                    <span className="gos-num" style={{ fontSize: 20, fontWeight: 600, color: st.id === BODY_ID ? AREA_COLORS[BODY_ID] : attrColor(lv) }}>{lv}</span>
+                    <span className="gos-num" style={{ fontSize: 20, fontWeight: 600, color: attrColor(lv) }}>{lv}</span>
                     <span className="gos-num" style={{ fontSize: 11, color: C.faint }}>/20</span>
                     {gap !== null && (
                       <div className="gos-num" style={{ fontSize: 9, color: gap > 0 ? C.mid : C.high, marginTop: 1 }}>
                         {gap > 0 ? `목표 ${tgt} (+${gap})` : "목표 달성"}
                       </div>
                     )}
+                    {gap !== null && gap > 0 && (() => {
+                      const remain = xpToTarget(lv, tgt, cur);
+                      const p = pace[st.id] || 0;
+                      const days = p > 0 ? Math.ceil(remain / p) : null;
+                      return (
+                        <div className="gos-num" style={{ fontSize: 8, color: C.faint, marginTop: 1 }}>
+                          {days ? `약 ${days}일` : "페이스 없음"}
+                        </div>
+                      );
+                    })()}
                   </div>
                   <div style={{ flex: 1 }}>
                     <div style={{ height: 6, background: C.bg, borderRadius: 3, overflow: "hidden" }}>
@@ -1294,7 +1445,7 @@ export default function GrowthOS() {
             {/* 행동력 — 파생 지표 행 */}
             <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderTop: `1px solid ${C.line}`, background: "rgba(67,217,163,.03)" }}>
               <div style={{ width: 84, flexShrink: 0 }}>
-                <div style={{ fontSize: 14, fontWeight: 500 }}>{EXEC.name}</div>
+                <div style={{ fontSize: 14, fontWeight: 500 }}>{uiLang === "ja" ? EXEC.ja : EXEC.name}</div>
                 <div className="gos-disp" style={{ fontSize: 9, color: C.faint, fontWeight: 600 }}>{EXEC.en} · 자동</div>
               </div>
               <div style={{ width: 52, textAlign: "center", flexShrink: 0 }}>
@@ -1325,10 +1476,36 @@ export default function GrowthOS() {
             </div>
           </div>
           <p style={{ fontSize: 11, color: C.faint, margin: "10px 0 0", lineHeight: 1.5 }}>
+            능력치 아래 「약 n일」은 <span style={{ color: C.mid }}>XP 충족 예상일</span>일 뿐이다 — 실제 승급은 언제나 외부 증거가 있어야 한다.
             행동력은 <span style={{ color: C.accent }}>모멘텀</span>이다 — 연속 완수는 가속, 하루 실패는 유예, <span style={{ color: C.low }}>2일 연속 미실행부터 감소</span>한다. 근육과 같다: 유지에도 훈련이 필요하다. 레벨업은 여전히 <span style={{ color: C.mid }}>외부 증거</span>가 필요하다.
           </p>
         </section>
         )}
+
+        {tab === "main" && (() => {
+          const now = logicalNow();
+          const qEnd = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3 + 3, 0);
+          const left = Math.ceil((qEnd - now) / 86400000);
+          const openMs = (state.milestones || []).filter((m) => !m.done).length;
+          const doneMs = (state.milestones || []).filter((m) => m.done && m.done.date >= fmtDate(new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1))).length;
+          if (left > 21) return null; // 분기 종료 3주 전부터 표시
+          return (
+            <div style={{
+              background: C.panel, border: `1px solid ${left <= 7 ? C.low : C.mid}`,
+              borderRadius: 8, padding: "12px 16px", marginBottom: 16,
+            }}>
+              <div className="gos-disp" style={{ fontSize: 11, color: left <= 7 ? C.low : C.mid, fontWeight: 700, marginBottom: 4 }}>
+                SEASON ENDING · D-{left}
+              </div>
+              <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.6 }}>
+                이번 분기 마일스톤 달성 {doneMs}건 · 미완 {openMs}건.
+                {doneMs === 0
+                  ? " 아직 하나도 없다. 남은 기간에 끝낼 수 있는 것 하나를 골라라."
+                  : " 분기 성적표는 체크 수가 아니라 이 숫자다."}
+              </div>
+            </div>
+          );
+        })()}
 
         {tab === "main" && (
           <button onClick={() => setTipIndex((i) => (i + 1) % TIPS.length)}
@@ -1352,6 +1529,111 @@ export default function GrowthOS() {
         {/* ---------- TODAY ---------- */}
         {tab === "today" && (
           <>
+            <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderLeft: `3px solid ${C.mid}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
+              <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: "0 0 4px" }}>MAIN QUESTS · 마일스톤</h2>
+              <p style={{ fontSize: 11, color: C.faint, margin: "0 0 10px", lineHeight: 1.5 }}>
+                일일 퀘스트가 리듬이라면 이쪽이 방향이다. <span style={{ color: C.mid }}>레벨은 사실상 여기서만 오른다</span> — 증빙 없이는 완료할 수 없다.
+                <br />배점은 4단계 고정이다 — {MS_TIERS.map((t) => `${t.label} ${t.xp.toLocaleString()}`).join(" / ")}. 임의 배점은 인플레이션의 통로라 막았다.
+                <br /><span style={{ color: C.mid }}>시장 응답도 마일스톤이다</span> — 지원(소형)·면접(중형)·합격(특대). 결과와 무관하게 XP를 얻는다. 지원하지 않으면 탈락도 없다.
+              </p>
+              {(state.milestones || []).filter((m) => !m.done).length === 0 && (
+                <p style={{ fontSize: 12, color: C.faint, margin: "0 0 10px" }}>
+                  진행 중인 마일스톤이 없다. 아래에서 추가하라
+                  {(state.milestones || []).some((m) => m.done) && " (달성분은 기록 탭 트로피 케이스에 있다)"}.
+                </p>
+              )}
+              {(state.milestones || []).filter((m) => !m.done).map((m) => {
+                const st = AREAS.find((a) => a.id === m.stat);
+                const dday = m.due ? Math.ceil((new Date(m.due + "T23:59:59") - new Date()) / 86400000) : null;
+                return (
+                  <div key={m.id} style={{
+                    padding: "10px 12px", marginBottom: 8, borderRadius: 6,
+                    border: `1px solid ${m.done ? C.high : C.line}`,
+                    background: m.done ? "rgba(67,217,163,.07)" : C.panelHi,
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span className="gos-disp" style={{ fontSize: 10, fontWeight: 700, color: AREA_COLORS[m.stat], flexShrink: 0 }}>{AN(st)}</span>
+                      <span style={{ flex: 1, fontSize: 13, textDecoration: m.done ? "line-through" : "none", opacity: m.done ? 0.7 : 1 }}>{m.name}</span>
+                      <span className="gos-num" style={{ fontSize: 11, color: C.mid, flexShrink: 0 }}>+{m.xp}</span>
+                      {!m.done && (
+                        <button onClick={() => removeMilestone(m.id)} aria-label="삭제"
+                          style={{ flexShrink: 0, border: "none", background: "transparent", color: C.faint, fontSize: 13, cursor: "pointer" }}>✕</button>
+                      )}
+                    </div>
+                    <div className="gos-num" style={{ fontSize: 10, color: C.faint, marginTop: 3 }}>
+                      {m.done
+                        ? <span style={{ color: C.high }}>✓ {m.done.date} — {m.done.proof}</span>
+                        : dday !== null
+                          ? <span style={{ color: dday <= 7 ? C.low : C.faint }}>{dday < 0 ? `D+${-dday} 경과` : dday === 0 ? "D-DAY" : `D-${dday}`}</span>
+                          : "기한 없음"}
+                    </div>
+                    {!m.done && msProofFor !== m.id && (
+                      <button onClick={() => { setMsProofFor(m.id); setMsProof(""); setMsUrl(""); }} className="gos-disp"
+                        style={{ width: "100%", marginTop: 8, padding: "8px 0", borderRadius: 5, border: `1px solid ${C.mid}`, background: "transparent", color: C.mid, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                        ★ 달성 보고 (증빙 필수)
+                      </button>
+                    )}
+                    {!m.done && msProofFor === m.id && (
+                      <div style={{ marginTop: 8 }}>
+                        <textarea className="gos-input" value={msProof} onChange={(e) => setMsProof(e.target.value)} rows={2}
+                          placeholder="증빙 — 제3자가 확인 가능한 것 (8자 이상)"
+                          style={{ width: "100%", background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px 10px", color: C.text, fontSize: 12, resize: "vertical" }} />
+                        <input className="gos-input gos-num" value={msUrl} onChange={(e) => setMsUrl(e.target.value)}
+                          placeholder="증빙 URL (선택)"
+                          style={{ width: "100%", marginTop: 6, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px 10px", color: C.text, fontSize: 12 }} />
+                        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                          <button onClick={() => setMsProofFor(null)} className="gos-disp"
+                            style={{ flex: 1, padding: "8px 0", borderRadius: 5, border: `1px solid ${C.line}`, background: "transparent", color: C.muted, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>취소</button>
+                          <button onClick={() => { if (completeMilestone(m.id, msProof, msUrl)) setMsProofFor(null); }}
+                            disabled={msProof.trim().length < 8} className="gos-disp"
+                            style={{
+                              flex: 2, padding: "8px 0", borderRadius: 5, border: "none",
+                              background: msProof.trim().length >= 8 ? C.mid : C.line,
+                              color: msProof.trim().length >= 8 ? C.bg : C.faint,
+                              fontSize: 12, fontWeight: 700, cursor: msProof.trim().length >= 8 ? "pointer" : "default",
+                            }}>+{m.xp} XP 획득</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+                {[["지원", 400], ["면접", 1200], ["합격", 8000]].map(([label, xp]) => (
+                  <button key={label} onClick={() => { setMsStat("port"); setMsName(`${label} — `); setMsXp(xp); }} className="gos-disp"
+                    style={{
+                      flex: 1, padding: "7px 0", fontSize: 11, fontWeight: 700, borderRadius: 5,
+                      border: `1px dashed ${C.mid}`, background: "transparent", color: C.mid, cursor: "pointer",
+                    }}>+ {label} {xp}</button>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                <select className="gos-input" value={msStat} onChange={(e) => setMsStat(e.target.value)}
+                  style={{ flexShrink: 0, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "7px", color: C.text, fontSize: 12 }}>
+                  {AREAS.map((a) => <option key={a.id} value={a.id}>{AN(a)}</option>)}
+                </select>
+                <input className="gos-input" value={msName} onChange={(e) => setMsName(e.target.value)}
+                  placeholder="마일스톤 (예: TOEIC 900)"
+                  style={{ flex: 1, minWidth: 0, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "7px 9px", color: C.text, fontSize: 12 }} />
+                <select className="gos-input gos-num" value={msXp} onChange={(e) => setMsXp(Number(e.target.value))}
+                  style={{ flexShrink: 0, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "7px 4px", color: C.mid, fontSize: 11 }}>
+                  {MS_TIERS.map((t) => <option key={t.xp} value={t.xp}>{t.label} {t.xp}</option>)}
+                </select>
+              </div>
+              <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                <input className="gos-input gos-num" type="date" value={msDue} onChange={(e) => setMsDue(e.target.value)}
+                  style={{ flex: 1, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "7px", color: C.text, fontSize: 12 }} />
+                <button onClick={() => { addMilestone(msStat, msName, msXp, msDue); setMsName(""); setMsDue(""); }}
+                  disabled={msName.trim().length < 2} className="gos-disp"
+                  style={{
+                    flexShrink: 0, padding: "0 16px", borderRadius: 5, border: "none",
+                    background: msName.trim().length >= 2 ? C.accent : C.line,
+                    color: msName.trim().length >= 2 ? C.bg : C.faint, fontSize: 12, fontWeight: 700,
+                    cursor: msName.trim().length >= 2 ? "pointer" : "default",
+                  }}>추가</button>
+              </div>
+            </section>
+
             <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
                 <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>TODAY'S QUESTS</h2>
@@ -1381,7 +1663,7 @@ export default function GrowthOS() {
                         color: C.bg, fontSize: 14, fontWeight: 700,
                       }}>{on ? "✓" : ""}</span>
                       <span style={{ flex: 1, fontSize: 14, opacity: on ? 0.75 : 1 }}>{h.name}</span>
-                      <span className="gos-num" style={{ fontSize: 10, color: C.faint, flexShrink: 0 }}>{st?.name} · {DIFF[habitDiff(h)].label} +{habitXp(h)} · {habitMin(h)}분</span>
+                      <span className="gos-num" style={{ fontSize: 10, color: C.faint, flexShrink: 0 }}>{AN(st)} · {DIFF[habitDiff(h)].label} +{habitXp(h)} · {habitMin(h)}분</span>
                     </button>
                     {!on && idx >= QUESTS_PER_DAY && (
                       <button onClick={() => removeQuestToday(idx)} className="gos-disp" title="추가분 제거"
@@ -1442,7 +1724,7 @@ export default function GrowthOS() {
                           padding: "10px 12px", border: "none", borderBottom: `1px solid ${C.line}`,
                           background: C.panelHi, color: C.text, fontSize: 13, cursor: "pointer",
                         }}>
-                        <span className="gos-disp" style={{ fontSize: 10, color: C.accent, fontWeight: 700, width: 60, flexShrink: 0 }}>{st?.name}</span>
+                        <span className="gos-disp" style={{ fontSize: 10, color: C.accent, fontWeight: 700, width: 60, flexShrink: 0 }}>{AN(st)}</span>
                         {h.name}
                       </button>
                     );
@@ -1557,7 +1839,20 @@ export default function GrowthOS() {
         {tab === "focus" && (
           <>
             <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
-              <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: "0 0 4px" }}>PROFILE & DREAM</h2>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>PROFILE & DREAM</h2>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {[["ko", "한국어"], ["ja", "日本語"]].map(([lc, label]) => (
+                    <button key={lc} onClick={() => { setUiLang(lc); setState((s) => ({ ...s, uiLang: lc })); }} className="gos-disp"
+                      style={{
+                        padding: "5px 10px", fontSize: 11, fontWeight: 700, borderRadius: 5,
+                        border: `1px solid ${uiLang === lc ? C.accent : C.line}`,
+                        background: uiLang === lc ? "rgba(67,217,163,.1)" : "transparent",
+                        color: uiLang === lc ? C.accent : C.muted, cursor: "pointer",
+                      }}>{label}</button>
+                  ))}
+                </div>
+              </div>
               <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
                 <input className="gos-input" value={state.profile?.job || ""}
                   onChange={(e) => setState((s) => ({ ...s, profile: { ...s.profile, job: e.target.value } }))}
@@ -1611,7 +1906,7 @@ export default function GrowthOS() {
               <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
                 {[...AREAS, EXEC].map((st) => (
                   <div key={st.id} style={{ textAlign: "center" }}>
-                    <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>{st.name}</div>
+                    <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>{AN(st)}</div>
                     <input className="gos-input gos-num" type="number" min={1} max={20}
                       value={state.goal?.targets?.[st.id] ?? ""}
                       onChange={(e) => setTarget(st.id, e.target.value)}
@@ -1654,7 +1949,7 @@ export default function GrowthOS() {
                 const focusCount = TRAIN_AREAS.filter((a) => (state.weights[a.id] || 0) === 3).length;
                 return (
                   <div key={st.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderTop: `1px solid ${C.line}` }}>
-                    <div style={{ width: 84, flexShrink: 0, fontSize: 14 }}>{st.name}</div>
+                    <div style={{ width: 84, flexShrink: 0, fontSize: 14 }}>{AN(st)}</div>
                     <div style={{ display: "flex", gap: 6, flex: 1 }}>
                       {WEIGHT_LABELS.map((label, val) => {
                         const active = w === val;
@@ -1684,7 +1979,7 @@ export default function GrowthOS() {
               </p>
               {AREAS.map((ar) => (
                 <div key={ar.id} style={{ marginBottom: 8 }}>
-                  <div className="gos-disp" style={{ fontSize: 10, color: C.accent, fontWeight: 700, marginBottom: 4 }}>{ar.name}</div>
+                  <div className="gos-disp" style={{ fontSize: 10, color: C.accent, fontWeight: 700, marginBottom: 4 }}>{AN(ar)}</div>
                   {(state.subskills?.[ar.id] || []).map((sk) => (
                     <div key={sk.id} style={{ display: "flex", gap: 6, marginBottom: 5 }}>
                       <input className="gos-input" value={sk.name}
@@ -1705,7 +2000,7 @@ export default function GrowthOS() {
               <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
                 <select className="gos-input" value={nodeArea} onChange={(e) => setNodeArea(e.target.value)}
                   style={{ flexShrink: 0, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "7px", color: C.text, fontSize: 12 }}>
-                  {AREAS.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  {AREAS.map((s) => <option key={s.id} value={s.id}>{AN(s)}</option>)}
                 </select>
                 <input className="gos-input" value={nodeName} onChange={(e) => setNodeName(e.target.value)}
                   placeholder="노드 (예: 체중)"
@@ -1724,10 +2019,10 @@ export default function GrowthOS() {
                 const st = AREAS.find((s) => s.id === h.stat);
                 return (
                   <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderTop: `1px solid ${C.line}` }}>
-                    <span className="gos-disp" style={{ fontSize: 10, color: C.accent, fontWeight: 700, width: 64, flexShrink: 0 }}>{st?.name}</span>
+                    <span className="gos-disp" style={{ fontSize: 10, color: C.accent, fontWeight: 700, width: 64, flexShrink: 0 }}>{AN(st)}</span>
                     <span style={{ flex: 1, fontSize: 13 }}>{h.name}</span>
                     <span className="gos-num" style={{ flexShrink: 0, fontSize: 10, color: habitDiff(h) === 3 ? C.low : habitDiff(h) === 2 ? C.mid : C.faint }}>
-                      {DIFF[habitDiff(h)].label}·{habitXp(h)}XP·{habitMin(h)}분
+                      {DIFF[habitDiff(h)].label}·{habitMin(h)}분·최대 {habitXpFor(h, xpCapMin(h))}XP
                     </span>
                     <button onClick={() => removeHabit(h.id)} aria-label="삭제"
                       style={{ flexShrink: 0, border: "none", background: "transparent", color: C.faint, fontSize: 14, cursor: "pointer" }}>✕</button>
@@ -1737,7 +2032,7 @@ export default function GrowthOS() {
               <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
                 <select className="gos-input" value={newHabitStat} onChange={(e) => setNewHabitStat(e.target.value)}
                   style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px", color: C.text, fontSize: 12, flexShrink: 0 }}>
-                  {AREAS.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  {AREAS.map((s) => <option key={s.id} value={s.id}>{AN(s)}</option>)}
                 </select>
                 <select className="gos-input" value={newHabitDiff} onChange={(e) => setNewHabitDiff(Number(e.target.value))}
                   style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px", color: C.text, fontSize: 12, flexShrink: 0 }}>
@@ -1757,7 +2052,8 @@ export default function GrowthOS() {
                   style={{ flexShrink: 0, padding: "0 14px", borderRadius: 6, border: "none", background: C.accent, color: C.bg, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>추가</button>
               </div>
               <p style={{ fontSize: 10, color: C.faint, margin: "8px 0 0" }}>
-                난이도는 XP·모멘텀에, 목표 시간(분)은 영역별 누적 시간에 반영된다. 대(20XP) 하나가 소(5XP) 넷과 같다 — 쉬운 것만 골라도 이득이 없다.
+                XP는 <b style={{ color: C.text }}>실제 기록 시간 ÷ 10</b>이며, 상한은 목표 시간의 1.5배(최대 120분)다. 시간을 부풀려도 이득이 제한된다.
+                난이도는 모멘텀 가중치로 쓰인다 — 쉬운 것만 골라도 실행률에서 이득이 없다.
               </p>
             </section>
 
@@ -1859,6 +2155,58 @@ export default function GrowthOS() {
         {/* ---------- LOG ---------- */}
         {tab === "log" && (
           <>
+            <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderLeft: `3px solid ${C.mid}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
+              {(() => {
+                const done = (state.milestones || []).filter((m) => m.done)
+                  .sort((a, b) => (a.done.date < b.done.date ? 1 : -1));
+                const totalXp = done.reduce((s, m) => s + m.xp, 0);
+                return (
+                  <>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+                      <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>TROPHY CASE · 달성 기록</h2>
+                      <span className="gos-num" style={{ fontSize: 11, color: C.mid }}>
+                        {done.length}건 · {totalXp.toLocaleString()} XP
+                      </span>
+                    </div>
+                    {done.length === 0 ? (
+                      <p style={{ fontSize: 12, color: C.faint, margin: "6px 0 0", lineHeight: 1.6 }}>
+                        아직 비어 있다. 여기 채워지는 것들이 이력서에 쓸 수 있는 유일한 항목이다.
+                      </p>
+                    ) : (
+                      <>
+                        <p style={{ fontSize: 11, color: C.faint, margin: "0 0 10px" }}>증빙과 함께 확정된 성취. 순서는 최신순.</p>
+                        {done.map((m) => {
+                          const st = AREAS.find((a) => a.id === m.stat);
+                          const tier = MS_TIERS.find((t) => t.xp === m.xp);
+                          return (
+                            <div key={m.id} style={{
+                              display: "flex", gap: 10, padding: "10px 12px", marginBottom: 6,
+                              borderRadius: 6, background: C.panelHi,
+                              borderLeft: `3px solid ${AREA_COLORS[m.stat]}`,
+                            }}>
+                              <span style={{ fontSize: 16, flexShrink: 0, lineHeight: 1.3 }}>
+                                {m.xp >= 8000 ? "🏆" : m.xp >= 3000 ? "🥇" : m.xp >= 1200 ? "🥈" : "🥉"}
+                              </span>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: 13, fontWeight: 600 }}>{m.name}</div>
+                                <div className="gos-num" style={{ fontSize: 10, color: C.faint, marginTop: 2 }}>
+                                  {m.done.date} · {AN(st)} · {tier?.label || ""} +{m.xp.toLocaleString()} XP
+                                </div>
+                                <div style={{ fontSize: 11, color: C.muted, marginTop: 3, lineHeight: 1.5 }}>
+                                  {m.done.proof}
+                                  {m.done.url && <a href={m.done.url} target="_blank" rel="noreferrer" style={{ color: C.accent, marginLeft: 6 }}>↗</a>}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </>
+                    )}
+                  </>
+                );
+              })()}
+            </section>
+
             <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
               <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: "0 0 10px" }}>QUARTER SUMMARY · 분기 실행 기록</h2>
               {(() => {
@@ -1878,12 +2226,13 @@ export default function GrowthOS() {
                   d.setDate(d.getDate() + 1);
                 }
                 const qStartKey = fmtDate(qStart);
-                const promos = state.evidence.filter((e) => e.date >= qStartKey).length;
+                const promos = state.evidence.filter((e) => e.date >= qStartKey && !e.text.startsWith("[마일스톤]")).length;
                 const revs = state.reviews.filter((r) => r.date >= qStartKey).length;
+                const ms = (state.milestones || []).filter((m) => m.done && m.done.date >= qStartKey).length;
                 const cells = [
                   ["훈련일", active, ""],
-                  ["전량 완수", full, "일"],
                   ["실행률", assignedN ? Math.round((doneN / assignedN) * 100) : 0, "%"],
+                  ["마일스톤", ms, "건"],
                   ["승급", promos, "회"],
                   ["복기", revs, "회"],
                 ];
@@ -1927,7 +2276,7 @@ export default function GrowthOS() {
                 {AREAS.map((a) => (
                   <span key={a.id} style={{ fontSize: 10, color: C.faint, display: "flex", alignItems: "center", gap: 4 }}>
                     <span style={{ width: 8, height: 8, borderRadius: 2, background: AREA_COLORS[a.id] }} />
-                    {a.name} <span className="gos-num" style={{ color: C.muted }}>{(cumMin[a.id] / 60).toFixed(1)}h</span>
+                    {AN(a)} <span className="gos-num" style={{ color: C.muted }}>{(cumMin[a.id] / 60).toFixed(1)}h</span>
                   </span>
                 ))}
               </div>
@@ -1993,7 +2342,7 @@ export default function GrowthOS() {
                   <div key={i} style={{ borderTop: i ? `1px solid ${C.line}` : "none", padding: "10px 0" }}>
                     <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
                       <span className="gos-num" style={{ fontSize: 11, color: C.faint }}>{ev.date}</span>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: C.accent }}>{ev.major && "★"}{st?.name}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: C.accent }}>{ev.major && "★"}{AN(st)}</span>
                       <span className="gos-num" style={{ fontSize: 12, color: C.mid }}>{ev.from} → {ev.to}</span>
                       <span className="gos-disp" style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 8, border: `1px solid ${ev.kind === "official" ? C.high : C.line}`, color: ev.kind === "official" ? C.high : C.faint }}>{ev.kind === "official" ? "공인" : "자체"}</span>
                     </div>
@@ -2061,7 +2410,7 @@ export default function GrowthOS() {
                 <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <select className="gos-input" value={levelUpTarget} onChange={(e) => setLevelUpTarget(e.target.value)}
                     style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, padding: "6px 8px", color: C.text, fontSize: 15, fontWeight: 700 }}>
-                    {AREAS.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    {AREAS.map((s) => <option key={s.id} value={s.id}>{AN(s)}</option>)}
                   </select>
                   <span className="gos-num">{state.levels[levelUpTarget]} → {state.levels[levelUpTarget] + 1}</span>
                 </span>
