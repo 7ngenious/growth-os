@@ -142,8 +142,18 @@ const DEFAULT_STATE = {
     { id: "h2", stat: "tech", name: "딥워크 90분 (파이프라인 학습)", diff: 3, min: 90 },
     { id: "h3", stat: "port", name: "포트폴리오 커밋 1개 이상", diff: 2, min: 45 },
     { id: "h4", stat: "port", name: "README / 문서 30분", diff: 2, min: 30 },
-    { id: "h5", stat: "body", name: "운동 30분 / 취침 00:30 이전", diff: 1, min: 30 },
   ],
+  routine: [          // 매일 달성하고자 하는 습관 루틴 — 행동력·건강의 일일 입력
+    { id: "r1", name: "07:00 기상" },
+    { id: "r2", name: "간헐적 단식 (야식·군것질 없음)" },
+    { id: "r3", name: "단백질 120g 섭취" },
+    { id: "r4", name: "물 2L" },
+    { id: "r5", name: "30분 이상 운동" },
+    { id: "r6", name: "30분 이상 학습" },
+    { id: "r7", name: "00:30 이전 취침" },
+  ],
+  routineChecks: {},  // { 'YYYY-MM-DD': [routineId, ...] }
+  routineSince: "",   // 루틴 도입일 — 이전 날짜의 전량완수 판정에는 루틴을 적용하지 않는다
   til: {},             // { 'YYYY-MM-DD': { habitId: '한 줄 메모' } }
   actualMin: {},       // { 'YYYY-MM-DD': { habitId: 실제 분 } } — 미기록 시 목표 시간 사용
   weeklyGoals: { lang: 3, tech: 5, port: 3, body: 2 }, // 영역별 주간 목표 시간(h)
@@ -277,11 +287,15 @@ function topUpAssignment(dateKey, existing, habits, weights) {
 // - 완수일: 난이도 가중 실행률 × (0.7 + 전량완수 스트릭 보너스, 최대 1.2/일) 획득
 // - 부분 완수: 획득하되 스트릭은 유지 / 1일 미실행: 유예 / 2일 연속부터 -1.2/일
 // - 컨디션 모드(rest) 날: 완전 동결 — 획득·감소·스트릭 변동 없음. 단, 그날 완수하면 획득은 인정
-function calcExecution(assignments, checks, habits, rest) {
+function calcExecution(assignments, checks, habits, rest, routine, routineChecks, routineSince) {
+  const rTotal = (routine || []).length;
+  const rIds = new Set((routine || []).map((x) => x.id));
+  const rFrom = routineSince || "9999-12-31"; // 도입 전 기록은 소급 적용하지 않는다
   const hMap = {}; (habits || []).forEach((h) => { hMap[h.id] = h; });
-  const activeKeys = Object.keys(assignments)
-    .filter((k) => (assignments[k] || []).length)
-    .sort();
+  const activeKeys = Array.from(new Set([
+    ...Object.keys(assignments).filter((k) => (assignments[k] || []).length),
+    ...Object.keys(routineChecks || {}).filter((k) => (routineChecks[k] || []).length),
+  ])).sort();
   const tk = todayKey();  // 논리 날짜 기준 (새벽 2시 마감)
   let M = 0, streak = 0, missRun = 0, status = "idle";
   let assigned14 = 0, done14 = 0, totalFull = 0, maxStreak = 0;
@@ -298,13 +312,20 @@ function calcExecution(assignments, checks, habits, rest) {
       const doneIds = a.filter((id) => (checks[k] || []).includes(id));
       const totalW = a.reduce((s, id) => s + habitXp(hMap[id]), 0);
       const doneW = doneIds.reduce((s, id) => s + habitXp(hMap[id]), 0);
-      const r = totalW ? doneW / totalW : 0;
+      const questRate = totalW ? doneW / totalW : 0;
+      // 행동력 = 하기로 한 것을 실제로 했는가. 퀘스트와 루틴을 절반씩 반영한다.
+      const routineApplies = rTotal > 0 && k >= rFrom;
+      const rDone = ((routineChecks || {})[k] || []).filter((id) => rIds.has(id)).length;
+      const routineR = routineApplies ? rDone / rTotal : null;
+      const r = routineR === null ? questRate
+        : (a.length ? questRate * 0.5 + routineR * 0.5 : routineR);
       if (d >= cutoff14) { assigned14 += a.length; done14 += doneIds.length; }
       const isToday = k === tk;
       const frozen = rest && rest[k];
 
       if (r > 0) {
-        const full = doneIds.length === a.length && a.length > 0;
+        const full = doneIds.length === a.length && a.length > 0
+          && (!routineApplies || rDone === rTotal);
         if (full) {
           totalFull += 1;
           if (!frozen) { streak += 1; maxStreak = Math.max(maxStreak, streak); }
@@ -337,6 +358,36 @@ function calcExecution(assignments, checks, habits, rest) {
     rate14: assigned14 ? done14 / assigned14 : 0,
     gainPerDay: Math.round((0.7 + 0.05 * Math.min(streak, 10)) * 10) / 10,
   };
+}
+
+// 루틴 달성률: 특정 날짜의 완수 비율 (0~1)
+function routineRate(state, key) {
+  const total = (state.routine || []).length;
+  if (!total) return null;
+  const ids = new Set((state.routine || []).map((r) => r.id));
+  const done = ((state.routineChecks || {})[key] || []).filter((id) => ids.has(id)).length;
+  return done / total;
+}
+
+// 최근 n일 루틴 달성률 평균 및 항목별 통계
+function routineStats(state, days) {
+  const total = (state.routine || []).length;
+  if (!total) return { avg: 0, perItem: {}, dayCount: 0 };
+  const today = logicalNow();
+  let sum = 0, dayCount = 0;
+  const perItem = {};
+  (state.routine || []).forEach((r) => { perItem[r.id] = 0; });
+  // 오늘은 아직 진행 중이므로 평균에서 제외한다 (진행률이 낮게 보이는 착시 방지)
+  for (let i = 1; i <= days; i++) {
+    const d = new Date(today); d.setDate(d.getDate() - i);
+    const k = fmtDate(d);
+    const checks = (state.routineChecks || {})[k] || [];
+    if (state.routineSince && k < state.routineSince) continue;
+    dayCount += 1;
+    sum += checks.length / total;
+    checks.forEach((id) => { if (perItem[id] !== undefined) perItem[id] += 1; });
+  }
+  return { avg: dayCount ? sum / dayCount : 0, perItem, dayCount };
 }
 
 // 건강 트랙 이행률: 최근 14일 중 건강 퀘스트를 하나라도 완수한 날의 비율
@@ -518,7 +569,8 @@ function DayDetail({ state, dateKey }) {
   const checks = state.checks[dateKey] || [];
   const evs = state.evidence.filter((e) => e.date === dateKey);
   const revs = state.reviews.filter((r) => r.date === dateKey);
-  const empty = !assigned.length && !checks.length && !evs.length && !revs.length;
+  const empty = !assigned.length && !checks.length && !evs.length && !revs.length
+    && !((state.routineChecks || {})[dateKey] || []).length;
   return (
     <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 12, paddingTop: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
@@ -542,6 +594,18 @@ function DayDetail({ state, dateKey }) {
           </div>
         );
       })}
+      {(() => {
+        const rr = routineRate(state, dateKey);
+        if (rr === null) return null;
+        const done = ((state.routineChecks || {})[dateKey] || []).length;
+        const total = (state.routine || []).length;
+        if (!done) return null;
+        return (
+          <div style={{ fontSize: 12, marginTop: 6, color: "#5ec8d8" }}>
+            루틴 {done}/{total} ({Math.round(rr * 100)}%)
+          </div>
+        );
+      })()}
       {evs.map((ev, i) => {
         const st = AREAS.find((s) => s.id === ev.stat);
         return (
@@ -653,6 +717,7 @@ export default function GrowthOS() {
   const [newHabitDiff, setNewHabitDiff] = useState(2);
   const [newHabitMin, setNewHabitMin] = useState(30);
   const [newDream, setNewDream] = useState("");
+  const [newRoutine, setNewRoutine] = useState("");
   const [nodeArea, setNodeArea] = useState("lang");
   const [nodeName, setNodeName] = useState("");
   const [nodeValue, setNodeValue] = useState("");
@@ -688,6 +753,9 @@ export default function GrowthOS() {
       } catch (e) { /* 첫 실행 */ }
       s = { ...s, tipSeed: ((s.tipSeed || 0) + 1) % TIPS.length };
       // v22에서 건강이 별도 트랙으로 분리되기 전 편성 기록 정리 (완료한 건 기록으로 남긴다)
+      if ((s.routine || []).length && !s.routineSince) {
+        s = { ...s, routineSince: todayKey() }; // 오늘부터 루틴 판정 시작
+      }
       if (!s.bodySplitMigrated) {
         const bodyIds = new Set((s.habits || []).filter((h) => h.stat === BODY_ID).map((h) => h.id));
         const na = {};
@@ -750,7 +818,7 @@ export default function GrowthOS() {
     return !h || h.stat !== BODY_ID;
   });
   const todayChecks = state.checks[tKey] || [];
-  const exec = calcExecution(state.assignments, state.checks, state.habits, state.rest);
+  const exec = calcExecution(state.assignments, state.checks, state.habits, state.rest, state.routine, state.routineChecks, state.routineSince);
   const AN = (a) => (uiLang === "ja" ? (a?.ja || a?.name) : a?.name); // 영역명 표시
   const pace = xpPace(state.checks, state.habits);
   const body = calcBodyRate(state.checks, state.habits);
@@ -974,6 +1042,32 @@ export default function GrowthOS() {
     setState((s) => ({ ...s, weeklyGoals: { ...(s.weeklyGoals || {}), [area]: n } }));
   };
 
+  // 루틴 체크 — 달성률에 비례해 건강 XP를 준다 (하루 최대 5XP)
+  const toggleRoutine = (rid) => {
+    setState((s) => {
+      const cur = (s.routineChecks || {})[tKey] || [];
+      const on = cur.includes(rid);
+      const next = on ? cur.filter((x) => x !== rid) : [...cur, rid];
+      const total = (s.routine || []).length || 1;
+      const prevXp = Math.round((cur.length / total) * 5);
+      const nextXp = Math.round((next.length / total) * 5);
+      return {
+        ...s,
+        routineChecks: { ...(s.routineChecks || {}), [tKey]: next },
+        xp: { ...s.xp, body: Math.max(0, (s.xp.body || 0) + (nextXp - prevXp)) },
+      };
+    });
+  };
+
+  const addRoutine = (name) => {
+    if (!name.trim()) return;
+    setState((s) => ({ ...s, routine: [...(s.routine || []), { id: "r" + Date.now(), name: name.trim() }] }));
+  };
+
+  const removeRoutine = (rid) => {
+    setState((s) => ({ ...s, routine: (s.routine || []).filter((r) => r.id !== rid) }));
+  };
+
   const setTil = (habitId, text) => {
     setState((s) => ({
       ...s,
@@ -1109,6 +1203,9 @@ export default function GrowthOS() {
       ...AREAS.map((st) => statLine(st.id, st.name, state.levels[st.id])),
       `| 행동력 | ${exec.level}/20 | ${state.goal?.targets?.exec ?? "-"} | 최장 ${exec.maxStreak}일 연속 | 누적 전량완수 ${exec.totalFull}일 · 모멘텀 ${exec.momentum}/100 (실행으로만 산출) |`,
       ``,
+      ...((state.routine || []).length
+        ? [`루틴 달성률 — 최근 7일 ${Math.round(routineStats(state, 7).avg * 100)}% · 28일 ${Math.round(routineStats(state, 28).avg * 100)}%`, ``]
+        : []),
       `## Quarter Summary`,
       ``,
       `훈련일 ${active} · 전량 완수 ${full}일 · 실행률 ${aN ? Math.round((dN / aN) * 100) : 0}% · 승급 ${state.evidence.filter((e) => e.date >= fmtDate(qStart)).length}회`,
@@ -1241,6 +1338,24 @@ export default function GrowthOS() {
       });
       lines.push(``);
     });
+
+    // 루틴 달성
+    if ((state.routine || []).length) {
+      lines.push(`## 루틴 달성`);
+      lines.push(``);
+      lines.push(`| 항목 | ${days.map((k) => k.slice(8)).join(" | ")} | 달성 |`);
+      lines.push(`|---|${days.map(() => "---").join("|")}|---|`);
+      (state.routine || []).forEach((r) => {
+        const marks = days.map((k) => (((state.routineChecks || {})[k] || []).includes(r.id) ? "✓" : "·"));
+        const hit = marks.filter((x) => x === "✓").length;
+        lines.push(`| ${r.name} | ${marks.join(" | ")} | ${hit}/${days.length} |`);
+      });
+      const tot = (state.routine || []).length * days.length;
+      const done = days.reduce((s, k) => s + ((state.routineChecks || {})[k] || []).length, 0);
+      lines.push(``);
+      lines.push(`주간 달성률: **${tot ? Math.round((done / tot) * 100) : 0}%** (${done}/${tot})`);
+      lines.push(``);
+    }
 
     // 이번 주 승급·복기
     const evs = state.evidence.filter((e) => e.date >= thisWeekKey);
@@ -1784,61 +1899,65 @@ export default function GrowthOS() {
             </section>
 
             <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderLeft: `3px solid ${AREA_COLORS[BODY_ID]}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
-                <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>CONDITION TRACK · 건강</h2>
-                <span className="gos-num" style={{ fontSize: 11, color: body.rate >= 0.4 ? AREA_COLORS[BODY_ID] : C.faint }}>
-                  최근 14일 {body.done}/14일 ({Math.round(body.rate * 100)}%)
-                </span>
-              </div>
-              <p style={{ fontSize: 11, color: C.faint, margin: "0 0 10px", lineHeight: 1.5 }}>
-                추첨에 참여하지 않고 매일 표시된다. 못한 날이 스트릭·모멘텀을 깎지 않는다 —
-                건강은 경쟁하는 자산이 아니라 나머지를 가능하게 하는 조건이다.
-              </p>
-              {bodyHabits.length === 0 && (
-                <p style={{ fontSize: 12, color: C.faint, margin: 0 }}>건강 항목이 없다. 설정 탭 QUEST POOL에서 추가하라.</p>
-              )}
-              {bodyHabits.map((h) => {
-                const on = todayChecks.includes(h.id);
+              {(() => {
+                const total = (state.routine || []).length;
+                const todayDone = ((state.routineChecks || {})[tKey] || []).length;
+                const w = routineStats(state, 7);
+                const m = routineStats(state, 28);
                 return (
-                  <div key={h.id} style={{ marginBottom: 8 }}>
-                    <button onClick={() => toggleHabit(h)} className="gos-check"
-                      style={{
-                        display: "flex", alignItems: "center", gap: 12, width: "100%", textAlign: "left",
-                        padding: "12px 12px", borderRadius: 6, cursor: "pointer",
-                        border: `1px solid ${on ? AREA_COLORS[BODY_ID] : C.line}`,
-                        background: on ? "rgba(94,200,216,.10)" : C.panelHi, color: C.text,
-                      }}>
-                      <span style={{
-                        width: 22, height: 22, borderRadius: 5, flexShrink: 0,
-                        border: `2px solid ${on ? AREA_COLORS[BODY_ID] : C.faint}`,
-                        background: on ? AREA_COLORS[BODY_ID] : "transparent",
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        color: C.bg, fontSize: 14, fontWeight: 700,
-                      }}>{on ? "✓" : ""}</span>
-                      <span style={{ flex: 1, fontSize: 14, opacity: on ? 0.75 : 1 }}>{h.name}</span>
-                      <span className="gos-num" style={{ fontSize: 10, color: C.faint, flexShrink: 0 }}>{habitMin(h)}분</span>
-                    </button>
-                    {on && (
-                      <input className="gos-input" value={(state.til?.[tKey] || {})[h.id] || ""}
-                        onChange={(e) => setTil(h.id, e.target.value)}
-                        placeholder="메모 (선택)"
-                        style={{
-                          width: "100%", marginTop: 4, background: C.bg,
-                          border: `1px solid ${C.line}`, borderLeft: `3px solid ${AREA_COLORS[BODY_ID]}`,
-                          borderRadius: 6, padding: "8px 10px", color: C.text, fontSize: 12,
-                        }} />
+                  <>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+                      <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>DAILY ROUTINE · 습관 루틴</h2>
+                      <span className="gos-num" style={{ fontSize: 12, color: todayDone === total && total ? C.high : C.muted }}>
+                        오늘 {todayDone}/{total}
+                      </span>
+                    </div>
+                    <div className="gos-num" style={{ fontSize: 11, color: C.faint, marginBottom: 8 }}>
+                      최근 7일 <span style={{ color: w.avg >= 0.8 ? C.high : w.avg >= 0.5 ? C.mid : C.low }}>{Math.round(w.avg * 100)}%</span>
+                      {" · "}28일 <span style={{ color: m.avg >= 0.8 ? C.high : m.avg >= 0.5 ? C.mid : C.low }}>{Math.round(m.avg * 100)}%</span>
+                    </div>
+                    <p style={{ fontSize: 10, color: C.faint, margin: "0 0 10px", lineHeight: 1.5 }}>
+                      달성률은 <span style={{ color: AREA_COLORS.exec || C.accent }}>행동력 모멘텀</span>에 퀘스트와 절반씩 반영되고, 건강 XP도 하루 최대 5 준다.
+                    </p>
+                    {(state.routine || []).map((r) => {
+                      const on = ((state.routineChecks || {})[tKey] || []).includes(r.id);
+                      const hit7 = w.perItem[r.id] || 0;
+                      return (
+                        <button key={r.id} onClick={() => toggleRoutine(r.id)} className="gos-check"
+                          style={{
+                            display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left",
+                            padding: "10px 12px", marginBottom: 6, borderRadius: 6, cursor: "pointer",
+                            border: `1px solid ${on ? AREA_COLORS[BODY_ID] : C.line}`,
+                            background: on ? "rgba(94,200,216,.10)" : C.panelHi, color: C.text,
+                          }}>
+                          <span style={{
+                            width: 20, height: 20, borderRadius: 5, flexShrink: 0,
+                            border: `2px solid ${on ? AREA_COLORS[BODY_ID] : C.faint}`,
+                            background: on ? AREA_COLORS[BODY_ID] : "transparent",
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            color: C.bg, fontSize: 13, fontWeight: 700,
+                          }}>{on ? "✓" : ""}</span>
+                          <span style={{ flex: 1, fontSize: 13, opacity: on ? 0.75 : 1 }}>{r.name}</span>
+                          <span className="gos-num" style={{ fontSize: 10, color: hit7 >= 6 ? C.high : hit7 >= 4 ? C.mid : C.faint, flexShrink: 0 }}>
+                            7일 {hit7}
+                          </span>
+                        </button>
+                      );
+                    })}
+                    {total === 0 && (
+                      <p style={{ fontSize: 12, color: C.faint, margin: 0 }}>루틴 항목이 없다. 설정 탭에서 추가하라.</p>
                     )}
-                  </div>
+                  </>
                 );
-              })}
+              })()}
             </section>
 
             <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
               <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: "0 0 4px" }}>WEEKLY GOALS · 주간 목표</h2>
               <p style={{ fontSize: 11, color: C.faint, margin: "0 0 10px" }}>
-                영역별 주간 몰입 시간 목표(h). 퀘스트 완수 시 실제 기록 시간으로 자동 집계된다 — 따로 적을 것 없다.
+                영역별 주간 몰입 시간 목표(h). 퀘스트 완수 시 실제 기록 시간으로 자동 집계된다. 건강은 시간이 아니라 위의 루틴 달성률로 관리한다.
               </p>
-              {AREAS.map((ar) => {
+              {TRAIN_AREAS.map((ar) => {
                 const goalH = (state.weeklyGoals || {})[ar.id] ?? 0;
                 const doneH = weekMin[ar.id] / 60;
                 const pct = goalH > 0 ? Math.min(100, (doneH / goalH) * 100) : 0;
@@ -2050,6 +2169,28 @@ export default function GrowthOS() {
                   </div>
                 );
               })}
+            </section>
+
+            <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
+              <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: "0 0 4px" }}>ROUTINE · 습관 루틴 편집</h2>
+              <p style={{ fontSize: 11, color: C.faint, margin: "0 0 10px", lineHeight: 1.5 }}>
+                매일 반복하는 항목만 넣어라. 일회성 작업은 퀘스트나 마일스톤이다. 항목이 많을수록 100% 달성은 어려워진다.
+              </p>
+              {(state.routine || []).map((r) => (
+                <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: `1px solid ${C.line}` }}>
+                  <span style={{ flex: 1, fontSize: 13 }}>{r.name}</span>
+                  <button onClick={() => removeRoutine(r.id)} aria-label="삭제"
+                    style={{ flexShrink: 0, border: "none", background: "transparent", color: C.faint, fontSize: 13, cursor: "pointer" }}>✕</button>
+                </div>
+              ))}
+              <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+                <input className="gos-input" value={newRoutine} onChange={(e) => setNewRoutine(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { addRoutine(newRoutine); setNewRoutine(""); } }}
+                  placeholder="새 루틴 항목 (예: 물 2L)"
+                  style={{ flex: 1, minWidth: 0, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px 10px", color: C.text, fontSize: 13 }} />
+                <button onClick={() => { addRoutine(newRoutine); setNewRoutine(""); }} className="gos-disp"
+                  style={{ flexShrink: 0, padding: "0 14px", borderRadius: 5, border: "none", background: C.accent, color: C.bg, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>추가</button>
+              </div>
             </section>
 
             <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
