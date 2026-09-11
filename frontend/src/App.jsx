@@ -453,6 +453,16 @@ function dayRate(state, key) {
   return done / a.length;
 }
 
+// 그날 운동을 했는지 — 루틴의 '운동' 항목 또는 건강 퀘스트 완수
+function dayExercised(state, key) {
+  const exIds = new Set((state.routine || [])
+    .filter((r) => /운동|워크아웃|training|workout|筋トレ|運動/i.test(r.name))
+    .map((r) => r.id));
+  if (((state.routineChecks || {})[key] || []).some((id) => exIds.has(id))) return true;
+  const bodyIds = new Set((state.habits || []).filter((h) => h.stat === BODY_ID).map((h) => h.id));
+  return ((state.checks || {})[key] || []).some((id) => bodyIds.has(id));
+}
+
 // 그날 건강 트랙을 하나라도 실행했는지
 function dayBodyDone(state, key) {
   const bodyIds = new Set((state.habits || []).filter((h) => h.stat === BODY_ID).map((h) => h.id));
@@ -521,9 +531,8 @@ function HistoryCalendar({ state, selected, onSelect, month, onMonth }) {
           const future = key > todayKey();
           const rate = dayRate(state, key);
           const rr = routineRate(state, key);
-          const routinePerfect = rr !== null && rr >= 1
-            && (!state.routineSince || key >= state.routineSince);
-          const bodyDone = routinePerfect || dayBodyDone(state, key);
+          const routineTracked = !state.routineSince || key >= state.routineSince;
+          const exercised = dayExercised(state, key);
           const hasEvidence = state.evidence.some((e) => e.date === key);
           const hasReview = state.reviews.some((r) => r.date === key);
           const isSel = selected === key;
@@ -543,22 +552,27 @@ function HistoryCalendar({ state, selected, onSelect, month, onMonth }) {
               {hasEvidence && (
                 <span style={{ position: "absolute", top: 0, right: 2, fontSize: 10, color: C.mid, textShadow: "0 0 3px rgba(0,0,0,.7)" }}>★</span>
               )}
-              {bodyDone && (
-                <span style={{
-                  position: "absolute", top: 1, left: 3, fontSize: 9, lineHeight: 1.4,
-                  color: AREA_COLORS[BODY_ID], fontWeight: 700,
-                  textShadow: rate !== null ? "0 0 3px rgba(0,0,0,.5)" : "none",
-                }}>✓</span>
+              {exercised && (
+                <span style={{ position: "absolute", top: 1, left: 2, fontSize: 9, lineHeight: 1.3 }}>💪</span>
               )}
               {hasReview && (
-                <span style={{ position: "absolute", bottom: 3, left: "50%", transform: "translateX(-50%)", width: 4, height: 4, borderRadius: 2, background: rate !== null ? "#0d141c" : C.muted, opacity: .7 }} />
+                <span style={{ position: "absolute", bottom: 6, right: 3, width: 4, height: 4, borderRadius: 2, background: rate !== null ? "#0d141c" : C.muted, opacity: .8 }} />
+              )}
+              {/* 루틴 달성률 — 셀 하단 막대. 이진이 아니라 비율로 보여준다 */}
+              {rr !== null && routineTracked && (
+                <span style={{ position: "absolute", left: 3, right: 3, bottom: 2, height: 3, borderRadius: 2, background: rate !== null ? "rgba(0,0,0,.25)" : C.bg, overflow: "hidden" }}>
+                  <span style={{
+                    display: "block", height: "100%", width: `${Math.round(rr * 100)}%`,
+                    background: rr >= 1 ? AREA_COLORS[BODY_ID] : rr >= 0.6 ? "rgba(94,200,216,.75)" : "rgba(94,200,216,.45)",
+                  }} />
+                </span>
               )}
             </button>
           );
         })}
       </div>
       <div style={{ display: "flex", gap: 12, marginTop: 8, flexWrap: "wrap" }}>
-        {[["전량 완수", "rgba(67,217,163,.7)"], ["일부", "rgba(227,184,78,.6)"], ["미실행", "rgba(224,101,107,.55)"], ["★ 승급", C.mid], ["● 복기", C.muted], ["✓ 루틴 완벽", AREA_COLORS[BODY_ID]]].map(([l, c]) => (
+        {[["전량 완수", "rgba(67,217,163,.7)"], ["일부", "rgba(227,184,78,.6)"], ["미실행", "rgba(224,101,107,.55)"], ["★ 승급", C.mid], ["● 복기", C.muted], ["▁ 루틴 달성률", AREA_COLORS[BODY_ID]], ["💪 운동", C.muted]].map(([l, c]) => (
           <span key={l} style={{ fontSize: 10, color: C.faint, display: "flex", alignItems: "center", gap: 4 }}>
             <span style={{ width: 8, height: 8, borderRadius: 2, background: c }} />{l}
           </span>
@@ -1907,15 +1921,33 @@ export default function GrowthOS() {
                 const m = routineStats(state, 28);
                 return (
                   <>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
-                      <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>DAILY ROUTINE · 습관 루틴</h2>
-                      <span className="gos-num" style={{ fontSize: 12, color: todayDone === total && total ? C.high : C.muted }}>
-                        오늘 {todayDone}/{total}
-                      </span>
-                    </div>
-                    <div className="gos-num" style={{ fontSize: 11, color: C.faint, marginBottom: 8 }}>
-                      최근 7일 <span style={{ color: w.avg >= 0.8 ? C.high : w.avg >= 0.5 ? C.mid : C.low }}>{Math.round(w.avg * 100)}%</span>
-                      {" · "}28일 <span style={{ color: m.avg >= 0.8 ? C.high : m.avg >= 0.5 ? C.mid : C.low }}>{Math.round(m.avg * 100)}%</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 8 }}>
+                      {(() => {
+                        const pct = total ? todayDone / total : 0;
+                        const R = 22, CIRC = 2 * Math.PI * R;
+                        const col = pct >= 1 ? C.high : pct >= 0.6 ? AREA_COLORS[BODY_ID] : pct > 0 ? C.mid : C.faint;
+                        return (
+                          <svg width="56" height="56" viewBox="0 0 56 56" style={{ flexShrink: 0 }}>
+                            <circle cx="28" cy="28" r={R} fill="none" stroke={C.bg} strokeWidth="6" />
+                            <circle cx="28" cy="28" r={R} fill="none" stroke={col} strokeWidth="6"
+                              strokeLinecap="round" strokeDasharray={CIRC}
+                              strokeDashoffset={CIRC * (1 - pct)}
+                              transform="rotate(-90 28 28)" style={{ transition: "stroke-dashoffset .35s" }} />
+                            <text x="28" y="32" textAnchor="middle" fontSize="15" fontWeight="600" fill={col}
+                              fontFamily="'IBM Plex Mono', monospace">{Math.round(pct * 100)}</text>
+                          </svg>
+                        );
+                      })()}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>DAILY ROUTINE · 습관 루틴</h2>
+                        <div className="gos-num" style={{ fontSize: 12, color: todayDone === total && total ? C.high : C.muted, marginTop: 2 }}>
+                          오늘 {todayDone}/{total}
+                        </div>
+                        <div className="gos-num" style={{ fontSize: 11, color: C.faint, marginTop: 2 }}>
+                          7일 <span style={{ color: w.avg >= 0.8 ? C.high : w.avg >= 0.5 ? C.mid : C.low }}>{Math.round(w.avg * 100)}%</span>
+                          {" · "}28일 <span style={{ color: m.avg >= 0.8 ? C.high : m.avg >= 0.5 ? C.mid : C.low }}>{Math.round(m.avg * 100)}%</span>
+                        </div>
+                      </div>
                     </div>
                     <p style={{ fontSize: 10, color: C.faint, margin: "0 0 10px", lineHeight: 1.5 }}>
                       달성률은 <span style={{ color: AREA_COLORS.exec || C.accent }}>행동력 모멘텀</span>에 퀘스트와 절반씩 반영되고, 건강 XP도 하루 최대 5 준다.
