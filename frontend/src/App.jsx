@@ -325,8 +325,10 @@ function calcExecution(assignments, checks, habits, rest, routine, routineChecks
       const frozen = rest && rest[k];
 
       if (r > 0) {
+        // 루틴은 80% 이상이면 전량완수로 인정한다.
+        // 7개 전부를 매일 채우라는 기준은 스트릭을 사실상 봉인해 모멘텀 가속을 죽인다.
         const full = doneIds.length === a.length && a.length > 0
-          && (!routineApplies || rDone === rTotal);
+          && (!routineApplies || rDone / rTotal >= 0.8);
         if (full) {
           totalFull += 1;
           if (!frozen) { streak += 1; maxStreak = Math.max(maxStreak, streak); }
@@ -463,11 +465,6 @@ function dayExercised(state, key) {
   return ((state.checks || {})[key] || []).some((id) => bodyIds.has(id));
 }
 
-// 그날 건강 트랙을 하나라도 실행했는지
-function dayBodyDone(state, key) {
-  const bodyIds = new Set((state.habits || []).filter((h) => h.stat === BODY_ID).map((h) => h.id));
-  return (state.checks[key] || []).some((id) => bodyIds.has(id));
-}
 
 // 일자별·영역별 몰입 분 집계: 실제 기록(actualMin) 우선, 없으면 목표 시간
 function minutesByDay(state) {
@@ -736,6 +733,7 @@ export default function GrowthOS() {
   const [newHabitMin, setNewHabitMin] = useState(30);
   const [newDream, setNewDream] = useState("");
   const [newRoutine, setNewRoutine] = useState("");
+  const [logExpand, setLogExpand] = useState({ ev: false, rv: false });
   const [nodeArea, setNodeArea] = useState("lang");
   const [nodeName, setNodeName] = useState("");
   const [nodeValue, setNodeValue] = useState("");
@@ -1706,111 +1704,6 @@ export default function GrowthOS() {
         {/* ---------- TODAY ---------- */}
         {tab === "today" && (
           <>
-            <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderLeft: `3px solid ${C.mid}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
-              <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: "0 0 4px" }}>MAIN QUESTS · 마일스톤</h2>
-              <p style={{ fontSize: 11, color: C.faint, margin: "0 0 10px", lineHeight: 1.5 }}>
-                일일 퀘스트가 리듬이라면 이쪽이 방향이다. <span style={{ color: C.mid }}>레벨은 사실상 여기서만 오른다</span> — 증빙 없이는 완료할 수 없다.
-                <br />배점은 4단계 고정이다 — {MS_TIERS.map((t) => `${t.label} ${t.xp.toLocaleString()}`).join(" / ")}. 임의 배점은 인플레이션의 통로라 막았다.
-                <br /><span style={{ color: C.mid }}>시장 응답도 마일스톤이다</span> — 지원(소형)·면접(중형)·합격(특대). 결과와 무관하게 XP를 얻는다. 지원하지 않으면 탈락도 없다.
-              </p>
-              {(state.milestones || []).filter((m) => !m.done).length === 0 && (
-                <p style={{ fontSize: 12, color: C.faint, margin: "0 0 10px" }}>
-                  진행 중인 마일스톤이 없다. 아래에서 추가하라
-                  {(state.milestones || []).some((m) => m.done) && " (달성분은 기록 탭 트로피 케이스에 있다)"}.
-                </p>
-              )}
-              {(state.milestones || []).filter((m) => !m.done).map((m) => {
-                const st = AREAS.find((a) => a.id === m.stat);
-                const dday = m.due ? Math.ceil((new Date(m.due + "T23:59:59") - new Date()) / 86400000) : null;
-                return (
-                  <div key={m.id} style={{
-                    padding: "10px 12px", marginBottom: 8, borderRadius: 6,
-                    border: `1px solid ${m.done ? C.high : C.line}`,
-                    background: m.done ? "rgba(67,217,163,.07)" : C.panelHi,
-                  }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span className="gos-disp" style={{ fontSize: 10, fontWeight: 700, color: AREA_COLORS[m.stat], flexShrink: 0 }}>{AN(st)}</span>
-                      <span style={{ flex: 1, fontSize: 13, textDecoration: m.done ? "line-through" : "none", opacity: m.done ? 0.7 : 1 }}>{m.name}</span>
-                      <span className="gos-num" style={{ fontSize: 11, color: C.mid, flexShrink: 0 }}>+{m.xp}</span>
-                      {!m.done && (
-                        <button onClick={() => removeMilestone(m.id)} aria-label="삭제"
-                          style={{ flexShrink: 0, border: "none", background: "transparent", color: C.faint, fontSize: 13, cursor: "pointer" }}>✕</button>
-                      )}
-                    </div>
-                    <div className="gos-num" style={{ fontSize: 10, color: C.faint, marginTop: 3 }}>
-                      {m.done
-                        ? <span style={{ color: C.high }}>✓ {m.done.date} — {m.done.proof}</span>
-                        : dday !== null
-                          ? <span style={{ color: dday <= 7 ? C.low : C.faint }}>{dday < 0 ? `D+${-dday} 경과` : dday === 0 ? "D-DAY" : `D-${dday}`}</span>
-                          : "기한 없음"}
-                    </div>
-                    {!m.done && msProofFor !== m.id && (
-                      <button onClick={() => { setMsProofFor(m.id); setMsProof(""); setMsUrl(""); }} className="gos-disp"
-                        style={{ width: "100%", marginTop: 8, padding: "8px 0", borderRadius: 5, border: `1px solid ${C.mid}`, background: "transparent", color: C.mid, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                        ★ 달성 보고 (증빙 필수)
-                      </button>
-                    )}
-                    {!m.done && msProofFor === m.id && (
-                      <div style={{ marginTop: 8 }}>
-                        <textarea className="gos-input" value={msProof} onChange={(e) => setMsProof(e.target.value)} rows={2}
-                          placeholder="증빙 — 제3자가 확인 가능한 것 (8자 이상)"
-                          style={{ width: "100%", background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px 10px", color: C.text, fontSize: 12, resize: "vertical" }} />
-                        <input className="gos-input gos-num" value={msUrl} onChange={(e) => setMsUrl(e.target.value)}
-                          placeholder="증빙 URL (선택)"
-                          style={{ width: "100%", marginTop: 6, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px 10px", color: C.text, fontSize: 12 }} />
-                        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                          <button onClick={() => setMsProofFor(null)} className="gos-disp"
-                            style={{ flex: 1, padding: "8px 0", borderRadius: 5, border: `1px solid ${C.line}`, background: "transparent", color: C.muted, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>취소</button>
-                          <button onClick={() => { if (completeMilestone(m.id, msProof, msUrl)) setMsProofFor(null); }}
-                            disabled={msProof.trim().length < 8} className="gos-disp"
-                            style={{
-                              flex: 2, padding: "8px 0", borderRadius: 5, border: "none",
-                              background: msProof.trim().length >= 8 ? C.mid : C.line,
-                              color: msProof.trim().length >= 8 ? C.bg : C.faint,
-                              fontSize: 12, fontWeight: 700, cursor: msProof.trim().length >= 8 ? "pointer" : "default",
-                            }}>+{m.xp} XP 획득</button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
-                {[["지원", 400], ["면접", 1200], ["합격", 8000]].map(([label, xp]) => (
-                  <button key={label} onClick={() => { setMsStat("port"); setMsName(`${label} — `); setMsXp(xp); }} className="gos-disp"
-                    style={{
-                      flex: 1, padding: "7px 0", fontSize: 11, fontWeight: 700, borderRadius: 5,
-                      border: `1px dashed ${C.mid}`, background: "transparent", color: C.mid, cursor: "pointer",
-                    }}>+ {label} {xp}</button>
-                ))}
-              </div>
-              <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                <select className="gos-input" value={msStat} onChange={(e) => setMsStat(e.target.value)}
-                  style={{ flexShrink: 0, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "7px", color: C.text, fontSize: 12 }}>
-                  {AREAS.map((a) => <option key={a.id} value={a.id}>{AN(a)}</option>)}
-                </select>
-                <input className="gos-input" value={msName} onChange={(e) => setMsName(e.target.value)}
-                  placeholder="마일스톤 (예: TOEIC 900)"
-                  style={{ flex: 1, minWidth: 0, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "7px 9px", color: C.text, fontSize: 12 }} />
-                <select className="gos-input gos-num" value={msXp} onChange={(e) => setMsXp(Number(e.target.value))}
-                  style={{ flexShrink: 0, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "7px 4px", color: C.mid, fontSize: 11 }}>
-                  {MS_TIERS.map((t) => <option key={t.xp} value={t.xp}>{t.label} {t.xp}</option>)}
-                </select>
-              </div>
-              <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                <input className="gos-input gos-num" type="date" value={msDue} onChange={(e) => setMsDue(e.target.value)}
-                  style={{ flex: 1, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "7px", color: C.text, fontSize: 12 }} />
-                <button onClick={() => { addMilestone(msStat, msName, msXp, msDue); setMsName(""); setMsDue(""); }}
-                  disabled={msName.trim().length < 2} className="gos-disp"
-                  style={{
-                    flexShrink: 0, padding: "0 16px", borderRadius: 5, border: "none",
-                    background: msName.trim().length >= 2 ? C.accent : C.line,
-                    color: msName.trim().length >= 2 ? C.bg : C.faint, fontSize: 12, fontWeight: 700,
-                    cursor: msName.trim().length >= 2 ? "pointer" : "default",
-                  }}>추가</button>
-              </div>
-            </section>
-
             <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
                 <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>TODAY'S QUESTS</h2>
@@ -1951,6 +1844,7 @@ export default function GrowthOS() {
                     </div>
                     <p style={{ fontSize: 10, color: C.faint, margin: "0 0 10px", lineHeight: 1.5 }}>
                       달성률은 <span style={{ color: AREA_COLORS.exec || C.accent }}>행동력 모멘텀</span>에 퀘스트와 절반씩 반영되고, 건강 XP도 하루 최대 5 준다.
+                      전량완수(스트릭) 인정 기준은 <b style={{ color: C.text }}>80% 이상</b> — 하나쯤 놓쳐도 연속이 끊기지 않는다.
                     </p>
                     {(state.routine || []).map((r) => {
                       const on = ((state.routineChecks || {})[tKey] || []).includes(r.id);
@@ -1983,6 +1877,111 @@ export default function GrowthOS() {
                   </>
                 );
               })()}
+            </section>
+
+            <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderLeft: `3px solid ${C.mid}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
+              <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: "0 0 4px" }}>MAIN QUESTS · 마일스톤</h2>
+              <p style={{ fontSize: 11, color: C.faint, margin: "0 0 10px", lineHeight: 1.5 }}>
+                일일 퀘스트가 리듬이라면 이쪽이 방향이다. <span style={{ color: C.mid }}>레벨은 사실상 여기서만 오른다</span> — 증빙 없이는 완료할 수 없다.
+                <br />배점은 4단계 고정이다 — {MS_TIERS.map((t) => `${t.label} ${t.xp.toLocaleString()}`).join(" / ")}. 임의 배점은 인플레이션의 통로라 막았다.
+                <br /><span style={{ color: C.mid }}>시장 응답도 마일스톤이다</span> — 지원(소형)·면접(중형)·합격(특대). 결과와 무관하게 XP를 얻는다. 지원하지 않으면 탈락도 없다.
+              </p>
+              {(state.milestones || []).filter((m) => !m.done).length === 0 && (
+                <p style={{ fontSize: 12, color: C.faint, margin: "0 0 10px" }}>
+                  진행 중인 마일스톤이 없다. 아래에서 추가하라
+                  {(state.milestones || []).some((m) => m.done) && " (달성분은 기록 탭 트로피 케이스에 있다)"}.
+                </p>
+              )}
+              {(state.milestones || []).filter((m) => !m.done).map((m) => {
+                const st = AREAS.find((a) => a.id === m.stat);
+                const dday = m.due ? Math.ceil((new Date(m.due + "T23:59:59") - new Date()) / 86400000) : null;
+                return (
+                  <div key={m.id} style={{
+                    padding: "10px 12px", marginBottom: 8, borderRadius: 6,
+                    border: `1px solid ${m.done ? C.high : C.line}`,
+                    background: m.done ? "rgba(67,217,163,.07)" : C.panelHi,
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span className="gos-disp" style={{ fontSize: 10, fontWeight: 700, color: AREA_COLORS[m.stat], flexShrink: 0 }}>{AN(st)}</span>
+                      <span style={{ flex: 1, fontSize: 13, textDecoration: m.done ? "line-through" : "none", opacity: m.done ? 0.7 : 1 }}>{m.name}</span>
+                      <span className="gos-num" style={{ fontSize: 11, color: C.mid, flexShrink: 0 }}>+{m.xp}</span>
+                      {!m.done && (
+                        <button onClick={() => removeMilestone(m.id)} aria-label="삭제"
+                          style={{ flexShrink: 0, border: "none", background: "transparent", color: C.faint, fontSize: 13, cursor: "pointer" }}>✕</button>
+                      )}
+                    </div>
+                    <div className="gos-num" style={{ fontSize: 10, color: C.faint, marginTop: 3 }}>
+                      {m.done
+                        ? <span style={{ color: C.high }}>✓ {m.done.date} — {m.done.proof}</span>
+                        : dday !== null
+                          ? <span style={{ color: dday <= 7 ? C.low : C.faint }}>{dday < 0 ? `D+${-dday} 경과` : dday === 0 ? "D-DAY" : `D-${dday}`}</span>
+                          : "기한 없음"}
+                    </div>
+                    {!m.done && msProofFor !== m.id && (
+                      <button onClick={() => { setMsProofFor(m.id); setMsProof(""); setMsUrl(""); }} className="gos-disp"
+                        style={{ width: "100%", marginTop: 8, padding: "8px 0", borderRadius: 5, border: `1px solid ${C.mid}`, background: "transparent", color: C.mid, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                        ★ 달성 보고 (증빙 필수)
+                      </button>
+                    )}
+                    {!m.done && msProofFor === m.id && (
+                      <div style={{ marginTop: 8 }}>
+                        <textarea className="gos-input" value={msProof} onChange={(e) => setMsProof(e.target.value)} rows={2}
+                          placeholder="증빙 — 제3자가 확인 가능한 것 (8자 이상)"
+                          style={{ width: "100%", background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px 10px", color: C.text, fontSize: 12, resize: "vertical" }} />
+                        <input className="gos-input gos-num" value={msUrl} onChange={(e) => setMsUrl(e.target.value)}
+                          placeholder="증빙 URL (선택)"
+                          style={{ width: "100%", marginTop: 6, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px 10px", color: C.text, fontSize: 12 }} />
+                        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                          <button onClick={() => setMsProofFor(null)} className="gos-disp"
+                            style={{ flex: 1, padding: "8px 0", borderRadius: 5, border: `1px solid ${C.line}`, background: "transparent", color: C.muted, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>취소</button>
+                          <button onClick={() => { if (completeMilestone(m.id, msProof, msUrl)) setMsProofFor(null); }}
+                            disabled={msProof.trim().length < 8} className="gos-disp"
+                            style={{
+                              flex: 2, padding: "8px 0", borderRadius: 5, border: "none",
+                              background: msProof.trim().length >= 8 ? C.mid : C.line,
+                              color: msProof.trim().length >= 8 ? C.bg : C.faint,
+                              fontSize: 12, fontWeight: 700, cursor: msProof.trim().length >= 8 ? "pointer" : "default",
+                            }}>+{m.xp} XP 획득</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+                {[["지원", 400], ["면접", 1200], ["합격", 8000]].map(([label, xp]) => (
+                  <button key={label} onClick={() => { setMsStat("port"); setMsName(`${label} — `); setMsXp(xp); }} className="gos-disp"
+                    style={{
+                      flex: 1, padding: "7px 0", fontSize: 11, fontWeight: 700, borderRadius: 5,
+                      border: `1px dashed ${C.mid}`, background: "transparent", color: C.mid, cursor: "pointer",
+                    }}>+ {label} {xp}</button>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                <select className="gos-input" value={msStat} onChange={(e) => setMsStat(e.target.value)}
+                  style={{ flexShrink: 0, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "7px", color: C.text, fontSize: 12 }}>
+                  {AREAS.map((a) => <option key={a.id} value={a.id}>{AN(a)}</option>)}
+                </select>
+                <input className="gos-input" value={msName} onChange={(e) => setMsName(e.target.value)}
+                  placeholder="마일스톤 (예: TOEIC 900)"
+                  style={{ flex: 1, minWidth: 0, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "7px 9px", color: C.text, fontSize: 12 }} />
+                <select className="gos-input gos-num" value={msXp} onChange={(e) => setMsXp(Number(e.target.value))}
+                  style={{ flexShrink: 0, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "7px 4px", color: C.mid, fontSize: 11 }}>
+                  {MS_TIERS.map((t) => <option key={t.xp} value={t.xp}>{t.label} {t.xp}</option>)}
+                </select>
+              </div>
+              <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                <input className="gos-input gos-num" type="date" value={msDue} onChange={(e) => setMsDue(e.target.value)}
+                  style={{ flex: 1, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "7px", color: C.text, fontSize: 12 }} />
+                <button onClick={() => { addMilestone(msStat, msName, msXp, msDue); setMsName(""); setMsDue(""); }}
+                  disabled={msName.trim().length < 2} className="gos-disp"
+                  style={{
+                    flexShrink: 0, padding: "0 16px", borderRadius: 5, border: "none",
+                    background: msName.trim().length >= 2 ? C.accent : C.line,
+                    color: msName.trim().length >= 2 ? C.bg : C.faint, fontSize: 12, fontWeight: 700,
+                    cursor: msName.trim().length >= 2 ? "pointer" : "default",
+                  }}>추가</button>
+              </div>
             </section>
 
             <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
@@ -2623,10 +2622,16 @@ XP는 직접 정할 수 없다 — <b style={{ color: C.text }}>실제 기록 �
 
             <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
               <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: "0 0 10px" }}>EVIDENCE LOG · 승급 기록</h2>
-              {state.evidence.length === 0 && (
+              {(() => {
+                // 마일스톤은 트로피 케이스가 담당하므로 여기서는 제외한다 (같은 탭 중복 방지)
+                const list = state.evidence.filter((e) => !e.text.startsWith("[마일스톤]"));
+                const shown = logExpand.ev ? list : list.slice(0, 5);
+                return (
+                  <>
+              {list.length === 0 && (
                 <p style={{ fontSize: 12, color: C.faint, margin: 0 }}>아직 승급 기록이 없다. XP를 채우고 외부 증거로 첫 레벨업을 만들어라.</p>
               )}
-              {state.evidence.map((ev, i) => {
+              {shown.map((ev, i) => {
                 const st = AREAS.find((s) => s.id === ev.stat);
                 return (
                   <div key={i} style={{ borderTop: i ? `1px solid ${C.line}` : "none", padding: "10px 0" }}>
@@ -2643,18 +2648,33 @@ XP는 직접 정할 수 없다 — <b style={{ color: C.text }}>실제 기록 �
                   </div>
                 );
               })}
+              {list.length > 5 && (
+                <button onClick={() => setLogExpand((s) => ({ ...s, ev: !s.ev }))} className="gos-disp"
+                  style={{ width: "100%", marginTop: 8, padding: "8px 0", borderRadius: 5, border: `1px solid ${C.line}`, background: "transparent", color: C.muted, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                  {logExpand.ev ? "접기" : `전체 보기 (${list.length}건)`}
+                </button>
+              )}
+                  </>
+                );
+              })()}
             </section>
 
             <section style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 16 }}>
               <h2 className="gos-disp" style={{ fontSize: 14, fontWeight: 700, margin: "0 0 10px" }}>REVIEW LOG · 복기 기록</h2>
               {state.reviews.length === 0 && <p style={{ fontSize: 12, color: C.faint, margin: 0 }}>복기 기록이 아직 없다.</p>}
-              {state.reviews.map((r, i) => (
+              {(logExpand.rv ? state.reviews : state.reviews.slice(0, 5)).map((r, i) => (
                 <div key={i} style={{ borderTop: i ? `1px solid ${C.line}` : "none", padding: "10px 0" }}>
                   <div className="gos-num" style={{ fontSize: 11, color: C.faint }}>{r.date}</div>
                   <div style={{ fontSize: 13, marginTop: 3 }}><span style={{ color: C.low }}>실책</span> — {r.mistake}</div>
                   <div style={{ fontSize: 13, marginTop: 2 }}><span style={{ color: C.high }}>수정</span> — {r.fix}</div>
                 </div>
               ))}
+              {state.reviews.length > 5 && (
+                <button onClick={() => setLogExpand((s) => ({ ...s, rv: !s.rv }))} className="gos-disp"
+                  style={{ width: "100%", marginTop: 8, padding: "8px 0", borderRadius: 5, border: `1px solid ${C.line}`, background: "transparent", color: C.muted, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                  {logExpand.rv ? "접기" : `전체 보기 (${state.reviews.length}건)`}
+                </button>
+              )}
             </section>
           </>
         )}
