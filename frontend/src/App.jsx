@@ -134,7 +134,9 @@ const DEFAULT_STATE = {
   goal: {
     name: "제조 데이터 엔지니어 이직",
     targets: { lang: 15, tech: 14, port: 14, body: 12, exec: 16 },
-    deadline: "", // 목표 달성 희망일 — 페이스와 비교해 여유/부족을 계산한다
+    deadline: "",  // 목표 달성 희망일
+    baseline: null, // 목표 설정 시점의 레벨 — 진행률(%) 계산의 기준점
+    since: "",      // 목표 추적 시작일 — 기한 경과율 계산용
   },
   deadline: { name: "포트폴리오 공개", date: "" }, // 외부 이벤트 D-Day
   habits: [
@@ -414,29 +416,17 @@ function calcBodyRate(checks, habits) {
   return { rate: done / 14, done, days: 14, streak };
 }
 
-// 최근 28일 영역별 XP 획득 페이스 (일평균)
-function xpPace(checks, habits) {
-  const hm = {}; habits.forEach((h) => { hm[h.id] = h; });
-  const out = { lang: 0, tech: 0, port: 0, body: 0 };
-  const today = logicalNow();
-  for (let i = 0; i < 28; i++) {
-    const d = new Date(today); d.setDate(d.getDate() - i);
-    (checks[fmtDate(d)] || []).forEach((id) => {
-      const h = hm[id];
-      if (h && out[h.stat] !== undefined) out[h.stat] += habitXp(h);
-    });
-  }
-  Object.keys(out).forEach((k) => { out[k] = out[k] / 28; });
-  return out;
+
+// 목표 진행률: 기준 레벨 → 목표 레벨 구간에서 현재 위치 (0~1)
+// 레벨 사이의 XP 진행도까지 소수로 반영한다.
+function goalProgress(level, xp, base, target) {
+  if (target <= base) return 1;
+  const need = xpNeed(level);
+  const frac = need > 0 ? Math.min(1, (xp || 0) / need) : 0;
+  const pos = Math.min(target, level + frac);
+  return Math.max(0, Math.min(1, (pos - base) / (target - base)));
 }
 
-// 현재 레벨→목표 레벨까지 남은 총 XP
-function xpToTarget(level, target, currentXp) {
-  if (target <= level) return 0;
-  let need = -currentXp;
-  for (let l = level; l < target; l++) need += xpNeed(l);
-  return Math.max(0, Math.round(need));
-}
 
 // 이번 분기 컨디션 모드 사용 일수
 function restUsedThisQuarter(rest) {
@@ -769,6 +759,13 @@ export default function GrowthOS() {
       } catch (e) { /* 첫 실행 */ }
       s = { ...s, tipSeed: ((s.tipSeed || 0) + 1) % TIPS.length };
       // v22에서 건강이 별도 트랙으로 분리되기 전 편성 기록 정리 (완료한 건 기록으로 남긴다)
+      // 기준선은 온보딩이 끝난 뒤에만 캡처한다.
+      // 온보딩 전에 잡으면 사용자가 입력한 초기 능력치가 아니라 기본값이 기준이 된다.
+      if (s.onboarded && s.goal && !s.goal.baseline) {
+        s = { ...s, goal: { ...s.goal,
+          baseline: { ...s.levels, exec: 0 },
+          since: s.goal.since || s.profile?.startDate || todayKey() } };
+      }
       if ((s.routine || []).length && !s.routineSince) {
         s = { ...s, routineSince: todayKey() }; // 오늘부터 루틴 판정 시작
       }
@@ -833,7 +830,6 @@ export default function GrowthOS() {
   const todayChecks = state.checks[tKey] || [];
   const exec = calcExecution(state.assignments, state.checks, state.habits, state.rest, state.routine, state.routineChecks, state.routineSince);
   const AN = (a) => (uiLang === "ja" ? (a?.ja || a?.name) : a?.name); // 영역명 표시
-  const pace = xpPace(state.checks, state.habits);
   const body = calcBodyRate(state.checks, state.habits);
   const bodyHabits = state.habits.filter((h) => h.stat === BODY_ID);
   const dayMin = minutesByDay(state);
@@ -1454,7 +1450,10 @@ export default function GrowthOS() {
       <Onboarding
         initialLevels={state.levels}
         onStart={(profile, levels) =>
-          setState((s) => ({ ...s, profile, levels, onboarded: true }))
+          setState((s) => ({
+            ...s, profile, levels, onboarded: true,
+            goal: { ...s.goal, baseline: { ...levels, exec: 0 }, since: profile.startDate || todayKey() },
+          }))
         }
       />
     );
@@ -1572,12 +1571,11 @@ export default function GrowthOS() {
                       </div>
                     )}
                     {gap !== null && gap > 0 && (() => {
-                      const remain = xpToTarget(lv, tgt, cur);
-                      const p = pace[st.id] || 0;
-                      const days = p > 0 ? Math.ceil(remain / p) : null;
+                      const base = state.goal?.baseline?.[st.id] ?? lv;
+                      const prog = Math.round(goalProgress(lv, cur, base, tgt) * 100);
                       return (
                         <div className="gos-num" style={{ fontSize: 8, color: C.faint, marginTop: 1 }}>
-                          {days ? `약 ${days}일` : "페이스 없음"}
+                          진행 {prog}%
                         </div>
                       );
                     })()}
@@ -1651,7 +1649,7 @@ export default function GrowthOS() {
             </div>
           </div>
           <p style={{ fontSize: 11, color: C.faint, margin: "10px 0 0", lineHeight: 1.5 }}>
-            능력치 아래 「약 n일」은 <span style={{ color: C.mid }}>XP 충족 예상일</span>일 뿐이다 — 실제 승급은 언제나 외부 증거가 있어야 한다.
+            능력치 아래 「진행 n%」는 목표 설정 시점을 0%로 한 <span style={{ color: C.mid }}>XP 기준 진척도</span>다 — 실제 승급은 언제나 외부 증거가 있어야 한다.
             행동력은 <span style={{ color: C.accent }}>모멘텀</span>이다 — 연속 완수는 가속, 하루 실패는 유예, <span style={{ color: C.low }}>2일 연속 미실행부터 감소</span>한다. 근육과 같다: 유지에도 훈련이 필요하다. 레벨업은 여전히 <span style={{ color: C.mid }}>외부 증거</span>가 필요하다.
           </p>
         </section>
@@ -2120,45 +2118,55 @@ export default function GrowthOS() {
               </div>
               {state.goal?.deadline && (() => {
                 const left = Math.ceil((new Date(state.goal.deadline + "T23:59:59") - logicalNow()) / 86400000);
+                // 기한 경과율: 목표 추적 시작일 ~ 희망일 중 얼마나 지났는가
+                const since = state.goal?.since || state.profile?.startDate || todayKey();
+                const span = Math.max(1, (new Date(state.goal.deadline) - new Date(since)) / 86400000);
+                const elapsed = Math.max(0, Math.min(1, (logicalNow() - new Date(since)) / 86400000 / span));
                 const rows = [...AREAS, EXEC].map((a) => {
                   const lv = a.id === "exec" ? exec.level : state.levels[a.id];
                   const tgt = state.goal?.targets?.[a.id];
-                  if (!tgt || tgt <= lv) return { a, lv, tgt, done: true };
-                  if (a.id === "exec") return { a, lv, tgt, derived: true }; // 행동력은 XP로 오르지 않는다
-                  const remain = xpToTarget(lv, tgt, state.xp[a.id] || 0);
-                  const p = pace[a.id] || 0;
-                  return { a, lv, tgt, remain, days: p > 0 ? Math.ceil(remain / p) : null };
-                }).sort((x, y) => (y.days ?? (y.done ? -1 : 1e9)) - (x.days ?? (x.done ? -1 : 1e9)));
+                  const base = state.goal?.baseline?.[a.id] ?? lv;
+                  if (!tgt) return { a, lv, tgt, none: true, prog: 0 };
+                  const prog = a.id === "exec"
+                    ? (tgt > 0 ? Math.min(1, lv / tgt) : 1)
+                    : goalProgress(lv, state.xp[a.id] || 0, base, tgt);
+                  return { a, lv, tgt, prog, done: lv >= tgt };
+                }).sort((x, y) => x.prog - y.prog);
                 return (
                   <div style={{ marginTop: 10 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
-                      <span className="gos-disp" style={{ fontSize: 10, color: C.faint, fontWeight: 700 }}>병목 분석 (느린 순)</span>
+                      <span className="gos-disp" style={{ fontSize: 10, color: C.faint, fontWeight: 700 }}>진행률 (낮은 순)</span>
                       <span className="gos-num" style={{ fontSize: 12, color: left <= 30 ? C.low : C.mid, fontWeight: 600 }}>
-                        D-{left > 0 ? left : 0}
+                        D-{left > 0 ? left : 0} · 기간 {Math.round(elapsed * 100)}% 경과
                       </span>
                     </div>
                     {rows.map((r) => {
-                      const behind = r.days != null && r.days > left;
+                      const behind = !r.done && r.prog < elapsed;
+                      const diff = Math.round((r.prog - elapsed) * 100);
                       return (
-                        <div key={r.a.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderTop: `1px solid ${C.line}` }}>
-                          <span style={{ width: 58, flexShrink: 0, fontSize: 12, color: AREA_COLORS[r.a.id] || C.muted }}>{AN(r.a)}</span>
-                          <span className="gos-num" style={{ width: 52, flexShrink: 0, fontSize: 11, color: C.faint }}>{r.lv}→{r.tgt}</span>
-                          <span className="gos-num" style={{ flex: 1, fontSize: 11, textAlign: "right", color: C.faint }}>
-                            {r.done ? <span style={{ color: C.high }}>목표 달성</span>
-                              : r.derived ? "실행 누적으로만 상승"
-                              : `${r.remain.toLocaleString()} XP 남음`}
+                        <div key={r.a.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderTop: `1px solid ${C.line}` }}>
+                          <span style={{ width: 56, flexShrink: 0, fontSize: 12, color: AREA_COLORS[r.a.id] || C.muted }}>{AN(r.a)}</span>
+                          <span className="gos-num" style={{ width: 46, flexShrink: 0, fontSize: 11, color: C.faint }}>
+                            {r.none ? "-" : `${r.lv}→${r.tgt}`}
                           </span>
-                          <span className="gos-num" style={{ width: 96, flexShrink: 0, fontSize: 11, textAlign: "right",
-                            color: r.done ? C.high : r.days == null ? C.low : behind ? C.low : C.high }}>
-                            {r.done ? "✓" : r.derived ? "—" : r.days == null ? "페이스 0"
-                              : `${r.days}일 (${behind ? `-${r.days - left}` : `+${left - r.days}`})`}
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ height: 5, background: C.bg, borderRadius: 3, overflow: "hidden", position: "relative" }}>
+                              <div style={{ height: "100%", width: `${Math.round(r.prog * 100)}%`,
+                                background: r.done ? C.high : behind ? C.mid : AREA_COLORS[r.a.id] || C.accent, transition: "width .3s" }} />
+                              {/* 기한 경과 위치 표시 — 이 선보다 뒤처지면 지연 */}
+                              <div style={{ position: "absolute", top: -1, bottom: -1, left: `${Math.round(elapsed * 100)}%`, width: 1, background: C.text, opacity: .5 }} />
+                            </div>
+                          </div>
+                          <span className="gos-num" style={{ width: 78, flexShrink: 0, fontSize: 11, textAlign: "right",
+                            color: r.done ? C.high : behind ? C.low : C.high }}>
+                            {r.none ? "—" : r.done ? "✓ 달성" : `${Math.round(r.prog * 100)}% (${diff >= 0 ? "+" : ""}${diff})`}
                           </span>
                         </div>
                       );
                     })}
                     <p style={{ fontSize: 10, color: C.faint, margin: "8px 0 0", lineHeight: 1.6 }}>
-                      최근 28일 일일 퀘스트 페이스 기준이며 마일스톤은 반영되지 않는다 — 항상 비관적으로 나온다.
-                      「페이스 0」은 그 영역을 28일간 한 번도 하지 않았다는 뜻이다.
+                      막대의 세로선이 <b style={{ color: C.text }}>기한 경과 위치</b>다 — 선보다 왼쪽이면 뒤처진 것.
+                      괄호 안은 경과율 대비 차이(%p). 진행률은 목표 설정 시점의 레벨을 0%로 잡는다.
                     </p>
                   </div>
                 );
