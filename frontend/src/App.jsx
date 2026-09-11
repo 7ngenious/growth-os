@@ -142,6 +142,7 @@ const DEFAULT_STATE = {
     { id: "h2", stat: "tech", name: "딥워크 90분 (파이프라인 학습)", diff: 3, min: 90 },
     { id: "h3", stat: "port", name: "포트폴리오 커밋 1개 이상", diff: 2, min: 45 },
     { id: "h4", stat: "port", name: "README / 문서 30분", diff: 2, min: 30 },
+    { id: "h5", stat: "body", name: "운동 (부위·내용은 TIL에)", diff: 1, min: 40 },
   ],
   routine: [          // 매일 달성하고자 하는 습관 루틴 — 행동력·건강의 일일 입력
     { id: "r1", name: "07:00 기상" },
@@ -519,7 +520,10 @@ function HistoryCalendar({ state, selected, onSelect, month, onMonth }) {
           const key = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
           const future = key > todayKey();
           const rate = dayRate(state, key);
-          const bodyDone = dayBodyDone(state, key);
+          const rr = routineRate(state, key);
+          const routinePerfect = rr !== null && rr >= 1
+            && (!state.routineSince || key >= state.routineSince);
+          const bodyDone = routinePerfect || dayBodyDone(state, key);
           const hasEvidence = state.evidence.some((e) => e.date === key);
           const hasReview = state.reviews.some((r) => r.date === key);
           const isSel = selected === key;
@@ -554,7 +558,7 @@ function HistoryCalendar({ state, selected, onSelect, month, onMonth }) {
         })}
       </div>
       <div style={{ display: "flex", gap: 12, marginTop: 8, flexWrap: "wrap" }}>
-        {[["전량 완수", "rgba(67,217,163,.7)"], ["일부", "rgba(227,184,78,.6)"], ["미실행", "rgba(224,101,107,.55)"], ["★ 승급", C.mid], ["● 복기", C.muted], ["✓ 건강", AREA_COLORS[BODY_ID]]].map(([l, c]) => (
+        {[["전량 완수", "rgba(67,217,163,.7)"], ["일부", "rgba(227,184,78,.6)"], ["미실행", "rgba(224,101,107,.55)"], ["★ 승급", C.mid], ["● 복기", C.muted], ["✓ 루틴 완벽", AREA_COLORS[BODY_ID]]].map(([l, c]) => (
           <span key={l} style={{ fontSize: 10, color: C.faint, display: "flex", alignItems: "center", gap: 4 }}>
             <span style={{ width: 8, height: 8, borderRadius: 2, background: c }} />{l}
           </span>
@@ -811,12 +815,9 @@ export default function GrowthOS() {
 
   /* ---------- derived ---------- */
   const tKey = todayKey();
-  // 건강은 별도 트랙이므로 편성 목록에서 제외한다.
-  // v22 이전에 생성된 편성 기록에 건강이 남아 있을 수 있어 렌더 단계에서도 거른다.
-  const todayAssigned = (state.assignments[tKey] || []).filter((id) => {
-    const h = state.habits.find((x) => x.id === id);
-    return !h || h.stat !== BODY_ID;
-  });
+  // 건강 퀘스트는 자동 편성·모멘텀 판정에서 빠지지만, 수동 추가하면 목록에 표시된다
+  // (운동 부위 등을 TIL로 남기기 위한 용도)
+  const todayAssigned = state.assignments[tKey] || [];
   const todayChecks = state.checks[tKey] || [];
   const exec = calcExecution(state.assignments, state.checks, state.habits, state.rest, state.routine, state.routineChecks, state.routineSince);
   const AN = (a) => (uiLang === "ja" ? (a?.ja || a?.name) : a?.name); // 영역명 표시
@@ -1877,7 +1878,7 @@ export default function GrowthOS() {
               )}
               {showPicker && (
                 <div style={{ marginTop: 8, border: `1px solid ${C.line}`, borderRadius: 6, overflow: "hidden" }}>
-                  {state.habits.filter((h) => h.stat !== BODY_ID && !todayAssigned.includes(h.id)).map((h) => {
+                  {state.habits.filter((h) => !todayAssigned.includes(h.id)).map((h) => {
                     const st = AREAS.find((s) => s.id === h.stat);
                     return (
                       <button key={h.id} onClick={() => addQuestToday(h.id)}
@@ -1891,7 +1892,7 @@ export default function GrowthOS() {
                       </button>
                     );
                   })}
-                  {state.habits.filter((h) => h.stat !== BODY_ID && !todayAssigned.includes(h.id)).length === 0 && (
+                  {state.habits.filter((h) => !todayAssigned.includes(h.id)).length === 0 && (
                     <div style={{ padding: "10px 12px", fontSize: 12, color: C.faint }}>추가할 수 있는 훈련 항목이 없다. 집중 설정에서 풀을 늘려라.</div>
                   )}
                 </div>
@@ -2547,11 +2548,15 @@ XP는 직접 정할 수 없다 — <b style={{ color: C.text }}>실제 기록 �
               {(() => {
                 const y = calMonth.getFullYear(), m = calMonth.getMonth();
                 const dim = new Date(y, m + 1, 0).getDate();
-                let full = 0, partial = 0, miss = 0, frozen = 0, bodyDays = 0;
+                let full = 0, partial = 0, miss = 0, frozen = 0;
+                let rSum = 0, rDays = 0, rPerfect = 0;
                 for (let d = 1; d <= dim; d++) {
                   const k = `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
                   if (k > todayKey()) break;
-                  if (dayBodyDone(state, k)) bodyDays++;
+                  const rr = routineRate(state, k);
+                  if (rr !== null && (!state.routineSince || k >= state.routineSince) && k < todayKey()) {
+                    rSum += rr; rDays += 1; if (rr >= 1) rPerfect += 1;
+                  }
                   const r = dayRate(state, k);
                   if (r === null) continue;
                   if (r >= 1) full++;
@@ -2565,13 +2570,17 @@ XP는 직접 정할 수 없다 — <b style={{ color: C.text }}>실제 기록 �
                     <div className="gos-disp" style={{ fontSize: 10, color: C.faint, fontWeight: 700, marginBottom: 6 }}>
                       {m + 1}월 달성 현황{total === 0 && " — 기록 없음"}
                     </div>
-                    {(total > 0 || bodyDays > 0) && (
+                    {(total > 0 || rDays > 0) && (
                       <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
                         <span className="gos-num" style={{ fontSize: 12, color: C.high }}>🔥 전량 완수 {full}일</span>
                         <span className="gos-num" style={{ fontSize: 12, color: C.mid }}>🟡 일부 완수 {partial}일</span>
                         <span className="gos-num" style={{ fontSize: 12, color: C.low }}>🔴 미실행 {miss}일</span>
                         {frozen > 0 && <span className="gos-num" style={{ fontSize: 12, color: "#6aa8d8" }}>❄ 동결 {frozen}일</span>}
-                        <span className="gos-num" style={{ fontSize: 12, color: AREA_COLORS[BODY_ID] }}>💧 건강 {bodyDays}일</span>
+                        {rDays > 0 && (
+                          <span className="gos-num" style={{ fontSize: 12, color: AREA_COLORS[BODY_ID] }}>
+                            💧 루틴 평균 {Math.round((rSum / rDays) * 100)}% · 완벽 {rPerfect}일
+                          </span>
+                        )}
                       </div>
                     )}
                   </div>
