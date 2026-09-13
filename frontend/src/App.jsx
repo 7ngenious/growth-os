@@ -23,43 +23,72 @@ const SYNC_URL = ENV.VITE_SYNC_URL || "";
 const SYNC_TOKEN = ENV.VITE_SYNC_TOKEN || "";
 // ─────────────────────────────────────────────────────────────
 
-// 저장소 어댑터 — 우선순위: 동기화 서버(+로컬 캐시) > window.storage(아티팩트) > localStorage
-// 오프라인 우선: 항상 로컬에 먼저 쓰고, 서버 전송 실패는 조용히 무시(다음 저장 때 전체 상태가 다시 올라간다)
+// 저장소 어댑터 — Claude 아티팩트(window.storage) / 배포 환경(localStorage + 동기화 서버)
+//
+// 데이터 유실 방지 설계:
+//  1. 로컬 저장은 상태 변경 즉시 (앱이 백그라운드로 가도 남는다)
+//  2. 서버 전송은 디바운스하되, 종료 직전(pagehide)에 keepalive로 강제 전송
+//  3. 로드 시 로컬·서버의 _savedAt을 비교해 최신본을 채택 (오래된 캐시의 덮어쓰기 방지)
+const savedAtOf = (raw) => {
+  try { return JSON.parse(raw)?._savedAt || 0; } catch (e) { return 0; }
+};
+
 const store = {
   async get(k) {
+    const localRaw = (typeof localStorage !== "undefined") ? localStorage.getItem(k) : null;
+
     if (SYNC_URL) {
+      let serverRaw = null;
       try {
-        const res = await fetch(`${SYNC_URL}/state`, { headers: { "X-Sync-Token": SYNC_TOKEN } });
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 20000); // 무료 티어 콜드 스타트 여유
+        const res = await fetch(`${SYNC_URL}/state`, {
+          headers: { "X-Sync-Token": SYNC_TOKEN },
+          signal: ctrl.signal,
+        });
+        clearTimeout(t);
         if (res.ok) {
           const data = await res.json();
-          if (data && data.value) {
-            localStorage.setItem(k, data.value);
-            return { key: k, value: data.value };
-          }
+          if (data && data.value) serverRaw = data.value;
         }
-      } catch (e) { /* 오프라인 → 로컬 캐시 사용 */ }
-      const v = localStorage.getItem(k);
-      return v == null ? null : { key: k, value: v };
+      } catch (e) { /* 오프라인 또는 서버 기동 중 */ }
+
+      // 양쪽이 있으면 더 최근에 저장된 쪽을 채택한다
+      if (serverRaw && localRaw) {
+        const winner = savedAtOf(serverRaw) >= savedAtOf(localRaw) ? serverRaw : localRaw;
+        localStorage.setItem(k, winner);
+        return { key: k, value: winner };
+      }
+      if (serverRaw) localStorage.setItem(k, serverRaw);
+      const only = serverRaw || localRaw;
+      return only == null ? null : { key: k, value: only };
     }
+
     if (typeof window !== "undefined" && window.storage && window.storage.get) return window.storage.get(k);
-    const v = localStorage.getItem(k);
-    return v == null ? null : { key: k, value: v };
+    return localRaw == null ? null : { key: k, value: localRaw };
   },
-  async set(k, val) {
-    if (SYNC_URL) {
-      localStorage.setItem(k, val); // 로컬 캐시 먼저 — 서버가 죽어도 기록은 산다
-      try {
-        await fetch(`${SYNC_URL}/state`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json", "X-Sync-Token": SYNC_TOKEN },
-          body: JSON.stringify({ value: val }),
-        });
-      } catch (e) { /* 다음 저장 때 재동기화 */ }
-      return { key: k, value: val };
+
+  // 로컬에만 즉시 기록 (동기, 디바운스 없음)
+  saveLocal(k, val) {
+    try { localStorage.setItem(k, val); } catch (e) { /* 용량 초과 등 */ }
+  },
+
+  // 서버 전송. keepalive를 켜면 탭이 닫히는 중에도 요청이 완주한다.
+  async push(k, val, keepalive) {
+    if (!SYNC_URL) {
+      if (typeof window !== "undefined" && window.storage && window.storage.set) {
+        try { await window.storage.set(k, val); } catch (e) { /* 무시 */ }
+      }
+      return;
     }
-    if (typeof window !== "undefined" && window.storage && window.storage.set) return window.storage.set(k, val);
-    localStorage.setItem(k, val);
-    return { key: k, value: val };
+    try {
+      await fetch(`${SYNC_URL}/state`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "X-Sync-Token": SYNC_TOKEN },
+        body: JSON.stringify({ value: val }),
+        keepalive: !!keepalive,
+      });
+    } catch (e) { /* 다음 저장 때 전체 상태가 다시 올라간다 */ }
   },
 };
 
@@ -748,6 +777,7 @@ export default function GrowthOS() {
   const [minDraft, setMinDraft] = useState({}); // { habitId: "입력 중 문자열" }
   const [toast, setToast] = useState(null);
   const saveTimer = useRef(null);
+  const pendingPayload = useRef(null);
 
   /* ---------- persistence + 오늘 편성 보장 ---------- */
   useEffect(() => {
@@ -755,7 +785,11 @@ export default function GrowthOS() {
       let s = DEFAULT_STATE;
       try {
         const r = await store.get("growth-os-v2");
-        if (r && r.value) s = { ...DEFAULT_STATE, ...JSON.parse(r.value) };
+        if (r && r.value) {
+          const parsed = JSON.parse(r.value);
+          delete parsed._savedAt; // 저장 메타데이터는 상태에 포함하지 않는다
+          s = { ...DEFAULT_STATE, ...parsed };
+        }
       } catch (e) { /* 첫 실행 */ }
       s = { ...s, tipSeed: ((s.tipSeed || 0) + 1) % TIPS.length };
       // v22에서 건강이 별도 트랙으로 분리되기 전 편성 기록 정리 (완료한 건 기록으로 남긴다)
@@ -794,14 +828,35 @@ export default function GrowthOS() {
     })();
   }, []);
 
+  // 저장: 로컬은 즉시, 서버는 디바운스. 둘을 분리해 백그라운드 전환 시 유실을 막는다.
   useEffect(() => {
     if (!loaded) return;
+    const payload = JSON.stringify({ ...state, _savedAt: Date.now() });
+    pendingPayload.current = payload;
+    store.saveLocal("growth-os-v2", payload); // 동기 — 즉시 디스크에 남는다
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
-      try { await store.set("growth-os-v2", JSON.stringify(state)); }
-      catch (e) { console.error("저장 실패", e); }
-    }, 400);
+    saveTimer.current = setTimeout(() => {
+      store.push("growth-os-v2", payload, false);
+      pendingPayload.current = null;
+    }, 800);
   }, [state, loaded]);
+
+  // 앱이 백그라운드로 가거나 닫힐 때, 아직 전송 못 한 변경을 강제로 밀어넣는다.
+  useEffect(() => {
+    const flush = () => {
+      if (!pendingPayload.current) return;
+      clearTimeout(saveTimer.current);
+      store.push("growth-os-v2", pendingPayload.current, true); // keepalive
+      pendingPayload.current = null;
+    };
+    const onHide = () => { if (document.visibilityState === "hidden") flush(); };
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", flush);
+    };
+  }, []);
 
   // 자정 넘김 대응: 날짜가 바뀌면 새 편성 생성
   useEffect(() => {
@@ -1290,6 +1345,7 @@ export default function GrowthOS() {
           flash("가져오기 실패 — Growth OS 백업 파일이 아니다");
           return;
         }
+        delete parsed._savedAt;
         setState({ ...DEFAULT_STATE, ...parsed });
         flash("복원 완료 — 백업 시점의 기록으로 돌아왔다");
       } catch (e) {
