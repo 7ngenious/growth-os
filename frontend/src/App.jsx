@@ -793,6 +793,27 @@ export default function GrowthOS() {
       } catch (e) { /* 첫 실행 */ }
       s = { ...s, tipSeed: ((s.tipSeed || 0) + 1) % TIPS.length };
       // v22에서 건강이 별도 트랙으로 분리되기 전 편성 기록 정리 (완료한 건 기록으로 남긴다)
+      // 중첩 필드 마이그레이션 — 최상위 병합으로는 배열/객체 내부가 갱신되지 않는다
+      if (!s.nestedMigratedV47) {
+        s = {
+          ...s,
+          milestones: (s.milestones || []).map((m) => ({
+            created: m.created || "",          // v32에서 추가된 등록일
+            due: m.due || "",
+            done: m.done || null,
+            ...m,
+          })),
+          habits: (s.habits || []).map((h) => ({
+            diff: h.diff || 2,                  // 난이도 기본값
+            min: h.min || 30,                   // 목표 시간 기본값
+            ...h,
+          })),
+          routine: (s.routine || []).length ? s.routine : DEFAULT_STATE.routine,
+          nestedMigratedV47: true,
+        };
+        delete s.deadline;                      // v32에서 폐지된 단일 D-Day
+      }
+
       // 기준선은 온보딩이 끝난 뒤에만 캡처한다.
       // 온보딩 전에 잡으면 사용자가 입력한 초기 능력치가 아니라 기본값이 기준이 된다.
       if (s.onboarded && s.goal && !s.goal.baseline) {
