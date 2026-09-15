@@ -13,7 +13,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# ── 기동 시 검증: 안전한 기본값 대신 기동 거부 (C3) ──────────────
+# ── 기동 시 검증: 안전한 기본값 대신 기동 거부 ──────────────────
 TOKEN = os.environ.get("SYNC_TOKEN", "")
 if len(TOKEN) < 32:
     sys.exit(
@@ -21,14 +21,12 @@ if len(TOKEN) < 32:
         "생성 예: python -c \"import secrets;print(secrets.token_hex(32))\""
     )
 
-# ── CORS 화이트리스트 (C2) ────────────────────────────────────
-# ALLOWED_ORIGIN에 프런트엔드 도메인을 콤마로 구분해 지정한다.
-# 미지정 시 로컬 개발 주소만 허용 — 와일드카드는 사용하지 않는다.
+# ── CORS 화이트리스트 ─────────────────────────────────────────
 _origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGIN", "").split(",") if o.strip()]
 ALLOWED_ORIGINS = _origins or ["http://localhost:5173"]
 
 DB_PATH = os.environ.get("DB_PATH", "growth.db")
-MAX_BYTES = 2_000_000  # 상태 페이로드 상한 (M1)
+MAX_BYTES = 2_000_000
 
 app = FastAPI(title="Growth OS Sync", docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(
@@ -51,13 +49,16 @@ def db() -> sqlite3.Connection:
 
 
 def check(token: str) -> None:
-    """타이밍 공격에 안전한 상수 시간 비교 (C3)."""
     if not secrets.compare_digest(token or "", TOKEN):
         raise HTTPException(status_code=401, detail="invalid token")
 
 
 class StateIn(BaseModel):
     value: str
+    # 클라이언트가 마지막으로 확인한 서버 갱신 시각.
+    # 서버가 그보다 더 최근이면 덮어쓰기를 거부한다(낙관적 동시성 제어).
+    # None이면 검사를 건너뛴다 — 최초 저장 및 복구용.
+    baseUpdatedAt: float | None = None
 
 
 @app.get("/health")
@@ -81,8 +82,24 @@ def put_state(body: StateIn, x_sync_token: str = Header(default="")):
     check(x_sync_token)
     if len(body.value.encode("utf-8")) > MAX_BYTES:
         raise HTTPException(status_code=413, detail="payload too large")
-    now = time.time()
+
     con = db()
+    row = con.execute("SELECT updated_at FROM state WHERE id = 1").fetchone()
+    current = row[0] if row else None
+
+    # 낡은 클라이언트가 최신 기록을 덮어쓰는 것을 서버가 거부한다.
+    # 0.5초 여유는 부동소수 오차와 왕복 지연을 흡수하기 위함.
+    if current is not None and body.baseUpdatedAt is not None:
+        if current > body.baseUpdatedAt + 0.5:
+            stale = con.execute("SELECT value, updated_at FROM state WHERE id = 1").fetchone()
+            con.close()
+            raise HTTPException(
+                status_code=409,
+                detail={"reason": "stale write rejected",
+                        "serverUpdatedAt": stale[1]},
+            )
+
+    now = time.time()
     con.execute(
         "INSERT INTO state (id, value, updated_at) VALUES (1, ?, ?) "
         "ON CONFLICT(id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
