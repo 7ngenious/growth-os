@@ -68,9 +68,38 @@ const store = {
     return localRaw == null ? null : { key: k, value: localRaw };
   },
 
+  // 서버 상태만 읽어온다 (복귀 시 대조용). 실패하면 null.
+  async fetchRemote() {
+    if (!SYNC_URL) return null;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 15000);
+      const res = await fetch(`${SYNC_URL}/state`, {
+        headers: { "X-Sync-Token": SYNC_TOKEN }, signal: ctrl.signal,
+      });
+      clearTimeout(t);
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data && data.value ? data.value : null;
+    } catch (e) { return null; }
+  },
+
   // 로컬에만 즉시 기록 (동기, 디바운스 없음)
   saveLocal(k, val) {
     try { localStorage.setItem(k, val); } catch (e) { /* 용량 초과 등 */ }
+  },
+
+  // 덮어쓰기 사고 대비 스냅샷 — 최근 8개를 순환 보관한다
+  snapshot(val) {
+    try {
+      const list = JSON.parse(localStorage.getItem("growth-os-snapshots") || "[]");
+      list.unshift({ at: Date.now(), value: val });
+      localStorage.setItem("growth-os-snapshots", JSON.stringify(list.slice(0, 8)));
+    } catch (e) { /* 무시 */ }
+  },
+  readSnapshots() {
+    try { return JSON.parse(localStorage.getItem("growth-os-snapshots") || "[]"); }
+    catch (e) { return []; }
   },
 
   // 서버 전송. keepalive를 켜면 탭이 닫히는 중에도 요청이 완주한다.
@@ -778,6 +807,8 @@ export default function GrowthOS() {
   const [toast, setToast] = useState(null);
   const saveTimer = useRef(null);
   const pendingPayload = useRef(null);
+  const baseSavedAt = useRef(0);   // 현재 메모리 상태가 기준으로 삼는 저장 시각
+  const lastSnapAt = useRef(0);
 
   /* ---------- persistence + 오늘 편성 보장 ---------- */
   useEffect(() => {
@@ -852,15 +883,48 @@ export default function GrowthOS() {
   // 저장: 로컬은 즉시, 서버는 디바운스. 둘을 분리해 백그라운드 전환 시 유실을 막는다.
   useEffect(() => {
     if (!loaded) return;
-    const payload = JSON.stringify({ ...state, _savedAt: Date.now() });
+    const now = Date.now();
+    const payload = JSON.stringify({ ...state, _savedAt: now });
+    baseSavedAt.current = now;
     pendingPayload.current = payload;
     store.saveLocal("growth-os-v2", payload); // 동기 — 즉시 디스크에 남는다
+    // 10분에 한 번 스냅샷 (덮어쓰기 사고 복구용)
+    if (now - lastSnapAt.current > 600000) { store.snapshot(payload); lastSnapAt.current = now; }
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       store.push("growth-os-v2", payload, false);
       pendingPayload.current = null;
     }, 800);
   }, [state, loaded]);
+
+  // 앱 복귀 시 서버와 대조 — 백그라운드에 있던 낡은 메모리 상태가
+  // 다른 기기의 최신 기록을 덮어쓰는 것을 막는다. (부분 유실의 주 원인)
+  useEffect(() => {
+    if (!loaded) return;
+    const onVisible = async () => {
+      if (document.visibilityState !== "visible") return;
+      const remote = await store.fetchRemote();
+      if (!remote) return;
+      let parsed;
+      try { parsed = JSON.parse(remote); } catch (e) { return; }
+      const remoteAt = parsed._savedAt || 0;
+      if (remoteAt > baseSavedAt.current) {
+        store.snapshot(JSON.stringify({ ...state, _savedAt: baseSavedAt.current })); // 현재분 보존
+        delete parsed._savedAt;
+        setState({ ...DEFAULT_STATE, ...parsed });
+        store.saveLocal("growth-os-v2", remote);
+        baseSavedAt.current = remoteAt;
+        pendingPayload.current = null;
+        flash("다른 기기의 최신 기록을 불러왔다");
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [loaded, state]);
 
   // 앱이 백그라운드로 가거나 닫힐 때, 아직 전송 못 한 변경을 강제로 밀어넣는다.
   useEffect(() => {
@@ -1559,6 +1623,11 @@ export default function GrowthOS() {
               </h1>
               <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>
                 {state.profile?.dream || "목표 미설정"} · {quarterLabel()}
+              </div>
+              <div className="gos-num" style={{ fontSize: 10, color: C.faint, marginTop: 6 }}>
+                {SYNC_URL ? "☁ 동기화 사용 중" : "▢ 이 기기에만 저장"}
+                {" · 최종 저장 "}
+                {baseSavedAt.current ? new Date(baseSavedAt.current).toLocaleTimeString() : "-"}
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
               {state.goal?.deadline && (() => {
@@ -2476,6 +2545,44 @@ XP는 직접 정할 수 없다 — <b style={{ color: C.text }}>실제 기록 �
               <p style={{ fontSize: 10, color: C.faint, margin: "8px 0 0" }}>
                 복원은 현재 기록을 백업 시점으로 완전히 덮어쓴다. 가져오기 전에 지금 상태를 먼저 내보내라.
               </p>
+              {(() => {
+                const snaps = store.readSnapshots();
+                if (!snaps.length) return null;
+                return (
+                  <div style={{ marginTop: 12, borderTop: `1px solid ${C.line}`, paddingTop: 10 }}>
+                    <div className="gos-disp" style={{ fontSize: 11, color: C.mid, fontWeight: 700, marginBottom: 4 }}>
+                      자동 스냅샷 ({snaps.length})
+                    </div>
+                    <p style={{ fontSize: 10, color: C.faint, margin: "0 0 8px", lineHeight: 1.5 }}>
+                      이 기기에 10분 간격으로 보관된 복구 지점이다. 기록이 사라졌다면 여기서 되돌릴 수 있다.
+                    </p>
+                    {snaps.map((s, i) => {
+                      const d = new Date(s.at);
+                      return (
+                        <button key={i}
+                          onClick={() => {
+                            if (!window.confirm(`${d.toLocaleString()} 시점으로 되돌린다. 현재 상태는 스냅샷으로 보관된다.`)) return;
+                            try {
+                              store.snapshot(JSON.stringify({ ...state, _savedAt: Date.now() }));
+                              const p = JSON.parse(s.value);
+                              delete p._savedAt;
+                              setState({ ...DEFAULT_STATE, ...p });
+                              flash("스냅샷 복구 완료");
+                            } catch (e) { flash("복구 실패 — 손상된 스냅샷"); }
+                          }}
+                          className="gos-num"
+                          style={{
+                            display: "block", width: "100%", textAlign: "left", marginBottom: 4,
+                            padding: "7px 10px", borderRadius: 5, border: `1px solid ${C.line}`,
+                            background: "transparent", color: C.muted, fontSize: 11, cursor: "pointer",
+                          }}>
+                          ↩ {d.toLocaleString()}
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </section>
 
             <section style={{ background: C.panel, border: `1px solid rgba(224,101,107,.45)`, borderRadius: 8, padding: 16, marginTop: 16 }}>
